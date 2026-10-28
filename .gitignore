@@ -1,0 +1,8 @@
+.DS_Store
+.venv*/
+__pycache__/
+*.py[cod]
+*.wav
+.env
+.env.*
+jamendo_metadata.parquet
