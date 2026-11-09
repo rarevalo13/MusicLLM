@@ -6,3 +6,17 @@ __pycache__/
 .env
 .env.*
 jamendo_metadata.parquet
+sample_tracks/
+*_tracks/
+genre_tracks*/
+*_lora_data/
+audio_subset/
+lora_comparison/
+slurm-*.out
+selected_metadata.csv
+*.mp3
+*.parquet
+*.ckpt
+*.safetensors
+*_latents/
+lightning_logs/

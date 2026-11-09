@@ -1,0 +1,75 @@
+394,198 tracks with metadata
+34% have NO genre tags
+
+Top 40 genres (track counts):
+  electronic              79,508
+  ambient                 40,063
+  filmscore               37,954
+  rock                    28,963
+  corporate               22,483
+  classical               22,069
+  experimental            18,737
+  production              17,475
+  pop                     16,587
+  hiphop                  15,541
+  dance                   13,609
+  chillout                13,078
+  newage                  11,257
+  techno                  10,851
+  jazz                    10,547
+  house                   10,527
+  folk                     9,001
+  world                    8,119
+  indie                    6,298
+  loop                     6,231
+  metal                    6,115
+  trailer                  6,003
+  trance                   5,932
+  downtempo                5,370
+  darkambient              4,753
+  intro                    4,632
+  electropop               4,583
+  funk                     4,484
+  industrial               4,393
+  symphonic                4,266
+  trap                     4,043
+  neoclassical             3,980
+  lofi                     3,585
+  electronica              3,461
+  edm                      3,343
+  blues                    3,314
+  avantgarde               3,173
+  triphop                  3,054
+  synthpop                 2,821
+  rap                      2,797
+
+Top 20 instruments:
+  synthesizer             58,313
+  piano                   38,649
+  strings                 37,231
+  guitar                  20,721
+  bass                    14,952
+  drums                   14,648
+  electricguitar          14,415
+  orchestra               12,477
+  electroamplified         8,151
+  computer                 7,305
+  percussion               6,465
+  acousticguitar           5,975
+  drummachine              3,570
+  wind                     3,348
+  electricpiano            3,050
+  flute                    2,936
+  violin                   2,677
+  bells                    2,224
+  cello                    2,108
+  sampler                  1,977
+
+License types:
+0
+by-nc-nd    185459
+by-nc-sa    112095
+by-sa        51218
+by           21495
+by-nd        13269
+by-nc        10662
