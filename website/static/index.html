@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Music generator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1b2236;
+    --paper: #e8eef4;
+    --panel: #ffffff;
+    --muted: #566178;
+    --line: #c5d0dc;
+    --blue: #2f4bd8;
+    --blue-dark: #2339b0;
+    --saffron: #f5b82e;
+    --danger: #b3261e;
+    --wave-idle: rgba(220, 230, 242, 0.38);
+    --font: "Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 1rem;
+    line-height: 1.5;
+  }
+
+  :focus-visible {
+    outline: 3px solid var(--saffron);
+    outline-offset: 2px;
+  }
+
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: clamp(1.25rem, 4vw, 3rem);
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: clamp(1.5rem, 4vw, 3.5rem);
+    align-items: start;
+  }
+
+  h1 {
+    margin: 0 0 1.25rem;
+    font-size: clamp(2.4rem, 5.5vw, 4rem);
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    font-variation-settings: "opsz" 96;
+  }
+
+  label, .field-name { font-weight: 600; }
+
+  /* Prompt */
+  .prompt-label { display: block; margin-bottom: 0.4rem; }
+
+  textarea {
+    width: 100%;
+    min-height: 9rem;
+    padding: 1rem 1.1rem;
+    border: 2px solid var(--ink);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--ink);
+    font: inherit;
+    font-size: 1.25rem;
+    line-height: 1.4;
+    resize: vertical;
+  }
+
+  textarea::placeholder { color: #8b95a8; }
+
+  .hint { margin: 0.4rem 0 0; color: var(--muted); font-size: 0.9rem; }
+
+  /* Settings */
+  .settings { margin: 2rem 0 0; padding: 0; border: 0; }
+
+  .setting {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    gap: 0.5rem 1.5rem;
+    align-items: center;
+    padding: 1rem 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .setting:last-child { border-bottom: 1px solid var(--line); }
+
+  .setting p {
+    margin: 0.15rem 0 0;
+    color: var(--muted);
+    font-size: 0.9rem;
+    line-height: 1.4;
+  }
+
+  .control { display: flex; align-items: center; gap: 0.9rem; }
+
+  input[type="range"] {
+    flex: 1;
+    min-width: 0;
+    accent-color: var(--blue);
+    height: 1.5rem;
+  }
+
+  input[type="number"] {
+    width: 5.25rem;
+    padding: 0.4rem 0.5rem;
+    border: 1.5px solid var(--ink);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--ink);
+    font: inherit;
+    font-weight: 600;
+    text-align: right;
+  }
+
+  .unit { margin-left: -0.5rem; color: var(--muted); font-size: 0.9rem; min-width: 2.2rem; }
+
+  /* Buttons */
+  button {
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 6px;
+  }
+
+  button:disabled { cursor: not-allowed; opacity: 0.6; }
+
+  .generate {
+    margin-top: 1.75rem;
+    padding: 0.9rem 1.75rem;
+    border: 0;
+    background: var(--blue);
+    color: #fff;
+    font-size: 1.15rem;
+  }
+
+  .generate:hover:not(:disabled) { background: var(--blue-dark); }
+
+  .error {
+    margin: 1rem 0 0;
+    padding: 0.7rem 0.9rem;
+    border-left: 4px solid var(--danger);
+    background: #fbeceb;
+    color: #7a1a15;
+  }
+
+  /* Output panel */
+  .output {
+    position: sticky;
+    top: 1.5rem;
+    min-height: 22rem;
+    padding: clamp(1.1rem, 3vw, 1.75rem);
+    border-radius: 10px;
+    background: var(--ink);
+    color: #eef3f9;
+  }
+
+  .output h2 { margin: 0 0 1rem; font-size: 1.25rem; font-weight: 600; }
+
+  .output p { margin: 0; }
+
+  .empty { color: #b4c0d2; max-width: 30ch; }
+
+  .busy-bar {
+    height: 6px;
+    margin: 1rem 0 0.9rem;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.14);
+    overflow: hidden;
+  }
+
+  .busy-bar::before {
+    content: "";
+    display: block;
+    height: 100%;
+    width: 35%;
+    border-radius: 3px;
+    background: var(--saffron);
+    animation: slide 1.3s ease-in-out infinite;
+  }
+
+  @keyframes slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(300%); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .busy-bar::before { animation: none; width: 100%; opacity: 0.6; }
+  }
+
+  .wave {
+    position: relative;
+    height: 160px;
+    margin-bottom: 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    touch-action: none;
+  }
+
+  .wave canvas { display: block; width: 100%; height: 100%; }
+
+  .transport { display: flex; align-items: center; gap: 1rem; }
+
+  .play {
+    min-width: 5.5rem;
+    padding: 0.6rem 1.1rem;
+    border: 0;
+    background: var(--saffron);
+    color: var(--ink);
+  }
+
+  .play:hover { background: #ffc94d; }
+
+  .time { font-variant-numeric: tabular-nums; color: #d5deea; }
+
+  .meta { margin-top: 1rem; color: #b4c0d2; font-size: 0.9rem; }
+
+  .save {
+    margin-top: 1.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.18);
+  }
+
+  .save label { display: block; margin-bottom: 0.4rem; }
+
+  .name-row { display: flex; align-items: center; gap: 0.5rem; }
+
+  .name-row input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.55rem 0.7rem;
+    border: 1.5px solid rgba(255, 255, 255, 0.45);
+    border-radius: 6px;
+    background: transparent;
+    color: #fff;
+    font: inherit;
+  }
+
+  .name-row span { color: #b4c0d2; }
+
+  .save button {
+    margin-top: 0.8rem;
+    padding: 0.65rem 1.25rem;
+    border: 1.5px solid #fff;
+    background: #fff;
+    color: var(--ink);
+  }
+
+  .save button:hover { background: var(--saffron); border-color: var(--saffron); }
+
+  .saved { min-height: 1.4em; margin-top: 0.6rem; color: #b4c0d2; font-size: 0.9rem; }
+
+  [hidden] { display: none !important; }
+
+  @media (max-width: 860px) {
+    .page { grid-template-columns: minmax(0, 1fr); }
+    .output { position: static; min-height: 0; }
+    .setting { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>
+</head>
+<body>
+<main class="page">
+  <section aria-labelledby="title">
+    <h1 id="title">Music generator</h1>
+
+    <label class="prompt-label" for="prompt">Describe the music</label>
+    <textarea id="prompt" maxlength="1000"
+      placeholder="Rap music that captures driving slowly after a long day, sunny weather, all your friends in the car, 90 BPM"></textarea>
+    <p class="hint">Genre, mood, instruments and tempo all help. Press Ctrl+Enter or Cmd+Enter to generate.</p>
+
+    <div class="settings" role="group" aria-label="Generation settings">
+      <div class="setting">
+        <div>
+          <label class="field-name" for="duration-num">Duration</label>
+          <p>How long the track is. Longer tracks take longer to generate.</p>
+        </div>
+        <div class="control">
+          <input type="range" id="duration-range" step="1" aria-label="Duration slider">
+          <input type="number" id="duration-num" step="1" inputmode="numeric">
+          <span class="unit">sec</span>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div>
+          <label class="field-name" for="steps-num">Steps</label>
+          <p>How many passes the model makes to refine the sound. More steps usually add detail, up to a point, and take proportionally longer.</p>
+        </div>
+        <div class="control">
+          <input type="range" id="steps-range" step="1" aria-label="Steps slider">
+          <input type="number" id="steps-num" step="1" inputmode="numeric">
+          <span class="unit"></span>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div>
+          <label class="field-name" for="cfg_scale-num">CFG scale</label>
+          <p>How strictly the model follows your prompt. Low values sound looser and more varied. High values stick closer to the prompt but can sound harsher.</p>
+        </div>
+        <div class="control">
+          <input type="range" id="cfg_scale-range" step="0.5" aria-label="CFG scale slider">
+          <input type="number" id="cfg_scale-num" step="0.1" inputmode="decimal">
+          <span class="unit"></span>
+        </div>
+      </div>
+    </div>
+
+    <button type="button" class="generate" id="generate">Generate music</button>
+    <p class="error" id="error" role="alert" hidden></p>
+  </section>
+
+  <section class="output" aria-labelledby="output-title" aria-live="polite">
+    <h2 id="output-title">Your track</h2>
+
+    <div id="state-empty">
+      <p class="empty">Write a prompt and press Generate music. The track appears here so you can play it and save it.</p>
+    </div>
+
+    <div id="state-busy" hidden>
+      <p><strong>Generating your track.</strong> Keep this tab open.</p>
+      <div class="busy-bar" aria-hidden="true"></div>
+      <p id="elapsed">0 seconds elapsed</p>
+    </div>
+
+    <div id="state-ready" hidden>
+      <div class="wave" id="wave" tabindex="0" role="slider" aria-label="Seek through the track"
+           aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+        <canvas id="canvas"></canvas>
+      </div>
+      <div class="transport">
+        <button type="button" class="play" id="play">Play</button>
+        <span class="time" id="time">0:00 / 0:00</span>
+      </div>
+      <p class="meta" id="meta"></p>
+
+      <div class="save">
+        <label for="filename">File name</label>
+        <div class="name-row">
+          <input type="text" id="filename" autocomplete="off" spellcheck="false">
+          <span>.wav</span>
+        </div>
+        <button type="button" id="save">Save to your computer</button>
+        <p class="saved" id="saved" role="status"></p>
+      </div>
+    </div>
+
+    <audio id="audio" preload="auto"></audio>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const KEYS = ["duration", "steps", "cfg_scale"];
+  const COLORS = { played: "#f5b82e", idle: "rgba(220, 230, 242, 0.38)" };
+
+  const promptEl = $("prompt"), generateBtn = $("generate"), errorEl = $("error");
+  const audio = $("audio"), wave = $("wave"), canvas = $("canvas");
+  const playBtn = $("play"), timeEl = $("time"), metaEl = $("meta");
+  const filenameEl = $("filename"), saveBtn = $("save"), savedEl = $("saved");
+  const states = { empty: $("state-empty"), busy: $("state-busy"), ready: $("state-ready") };
+
+  let peaks = null, currentBlob = null, objectUrl = null, raf = 0, dragging = false;
+  let hasTrack = false, elapsedTimer = 0;
+
+  /* ---------- Settings ---------- */
+
+  const range = (k) => $(k + "-range");
+  const num = (k) => $(k + "-num");
+
+  function clamp(k, v) {
+    const lo = +range(k).min, hi = +range(k).max;
+    return Math.min(hi, Math.max(lo, v));
+  }
+
+  async function loadConfig() {
+    let cfg = { limits: { duration: [1, 180], steps: [1, 150], cfg_scale: [1, 15] },
+                defaults: { duration: 30, steps: 50, cfg_scale: 7 } };
+    try {
+      const res = await fetch("/api/config");
+      if (res.ok) cfg = await res.json();
+    } catch (_) { /* fall back to the values above */ }
+
+    for (const k of KEYS) {
+      const [lo, hi] = cfg.limits[k];
+      for (const el of [range(k), num(k)]) { el.min = lo; el.max = hi; }
+      num(k).value = range(k).value = cfg.defaults[k];
+      range(k).addEventListener("input", () => { num(k).value = range(k).value; });
+      num(k).addEventListener("input", () => { range(k).value = num(k).value; });
+      num(k).addEventListener("change", () => {
+        const v = parseFloat(num(k).value);
+        num(k).value = clamp(k, Number.isFinite(v) ? v : cfg.defaults[k]);
+        range(k).value = num(k).value;
+      });
+    }
+    if (cfg.maxPromptChars) promptEl.maxLength = cfg.maxPromptChars;
+  }
+
+  /* ---------- Panel state ---------- */
+
+  function showState(name) {
+    for (const [key, el] of Object.entries(states)) el.hidden = key !== name;
+  }
+
+  function showError(message) {
+    errorEl.textContent = message;
+    errorEl.hidden = false;
+  }
+
+  /* ---------- Generate ---------- */
+
+  async function generate() {
+    errorEl.hidden = true;
+    const prompt = promptEl.value.trim();
+    if (!prompt) {
+      showError("Write a prompt first, then press Generate music.");
+      promptEl.focus();
+      return;
+    }
+    const body = { prompt };
+    for (const k of KEYS) body[k] = parseFloat(num(k).value);
+
+    audio.pause();
+    generateBtn.disabled = true;
+    generateBtn.textContent = "Generating…";
+    showState("busy");
+    const started = performance.now();
+    const tick = () => {
+      const s = Math.round((performance.now() - started) / 1000);
+      $("elapsed").textContent = s + (s === 1 ? " second" : " seconds") + " elapsed";
+    };
+    tick();
+    elapsedTimer = setInterval(tick, 1000);
+
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        let message = "The server could not generate this track.";
+        try { message = (await res.json()).error || message; } catch (_) {}
+        throw new Error(message);
+      }
+      const blob = await res.blob();
+      await showTrack(blob, body, (performance.now() - started) / 1000);
+    } catch (err) {
+      showError(err instanceof TypeError
+        ? "Could not reach the server. Check that app.py is still running in your terminal."
+        : err.message);
+      showState(hasTrack ? "ready" : "empty");
+    } finally {
+      clearInterval(elapsedTimer);
+      generateBtn.disabled = false;
+      generateBtn.textContent = "Generate music";
+    }
+  }
+
+  /* ---------- Track + waveform ---------- */
+
+  async function computePeaks(blob, count = 2000) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    try {
+      const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+      const data = decoded.getChannelData(0);
+      const size = Math.max(1, Math.floor(data.length / count));
+      const out = new Float32Array(count);
+      let max = 0;
+      for (let i = 0; i < count; i++) {
+        let p = 0;
+        const end = Math.min(data.length, (i + 1) * size);
+        for (let j = i * size; j < end; j++) p = Math.max(p, Math.abs(data[j]));
+        out[i] = p;
+        max = Math.max(max, p);
+      }
+      if (max > 0) for (let i = 0; i < count; i++) out[i] /= max;
+      return out;
+    } finally {
+      ctx.close();
+    }
+  }
+
+  function slugify(text) {
+    const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+      .split("-").slice(0, 6).join("-");
+    return slug || "track";
+  }
+
+  function formatTime(s) {
+    if (!Number.isFinite(s)) s = 0;
+    return Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+  }
+
+  async function showTrack(blob, settings, seconds) {
+    peaks = await computePeaks(blob);
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    currentBlob = blob;
+    objectUrl = URL.createObjectURL(blob);
+    audio.src = objectUrl;
+    hasTrack = true;
+
+    filenameEl.value = slugify(settings.prompt);
+    savedEl.textContent = "";
+    metaEl.textContent = settings.duration + " seconds, " + settings.steps + " steps, CFG scale "
+      + settings.cfg_scale + ". Generated in " + Math.round(seconds) + " seconds, "
+      + (blob.size / 1048576).toFixed(1) + " MB.";
+    playBtn.textContent = "Play";
+    showState("ready");
+    await new Promise((r) => (audio.readyState >= 1 ? r() : audio.addEventListener("loadedmetadata", r, { once: true })));
+    draw();
+    updateTime();
+  }
+
+  function draw() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = wave.clientWidth, h = wave.clientHeight;
+    if (!w || !h) return;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (!peaks) return;
+
+    const barW = 3, gap = 2;
+    const n = Math.max(1, Math.floor((w + gap) / (barW + gap)));
+    const progress = audio.duration ? audio.currentTime / audio.duration : 0;
+    const playedX = progress * w;
+
+    for (let i = 0; i < n; i++) {
+      const from = Math.floor((i / n) * peaks.length);
+      const to = Math.max(from + 1, Math.floor(((i + 1) / n) * peaks.length));
+      let p = 0;
+      for (let j = from; j < to; j++) p = Math.max(p, peaks[j]);
+      const barH = Math.max(3, p * h * 0.92);
+      const x = i * (barW + gap);
+      ctx.fillStyle = x + barW / 2 <= playedX ? COLORS.played : COLORS.idle;
+      ctx.fillRect(x, (h - barH) / 2, barW, barH);
+    }
+  }
+
+  function updateTime() {
+    const d = Number.isFinite(audio.duration) ? audio.duration : 0;
+    timeEl.textContent = formatTime(audio.currentTime) + " / " + formatTime(d);
+    wave.setAttribute("aria-valuemax", Math.round(d));
+    wave.setAttribute("aria-valuenow", Math.round(audio.currentTime));
+    wave.setAttribute("aria-valuetext", formatTime(audio.currentTime) + " of " + formatTime(d));
+  }
+
+  function loop() {
+    draw();
+    updateTime();
+    if (!audio.paused) raf = requestAnimationFrame(loop);
+  }
+
+  /* ---------- Playback ---------- */
+
+  playBtn.addEventListener("click", () => {
+    if (audio.paused) audio.play(); else audio.pause();
+  });
+  audio.addEventListener("play", () => { playBtn.textContent = "Pause"; cancelAnimationFrame(raf); loop(); });
+  audio.addEventListener("pause", () => { playBtn.textContent = "Play"; draw(); updateTime(); });
+  audio.addEventListener("ended", () => { playBtn.textContent = "Play"; draw(); updateTime(); });
+
+  function seekTo(clientX) {
+    if (!Number.isFinite(audio.duration)) return;
+    const r = wave.getBoundingClientRect();
+    const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    audio.currentTime = f * audio.duration;
+    draw();
+    updateTime();
+  }
+
+  wave.addEventListener("pointerdown", (e) => { dragging = true; wave.setPointerCapture(e.pointerId); seekTo(e.clientX); });
+  wave.addEventListener("pointermove", (e) => { if (dragging) seekTo(e.clientX); });
+  wave.addEventListener("pointerup", () => { dragging = false; });
+  wave.addEventListener("pointercancel", () => { dragging = false; });
+
+  wave.addEventListener("keydown", (e) => {
+    const d = audio.duration;
+    if (!Number.isFinite(d)) return;
+    const moves = { ArrowLeft: -5, ArrowRight: 5 };
+    if (e.key in moves) audio.currentTime = Math.min(d, Math.max(0, audio.currentTime + moves[e.key]));
+    else if (e.key === "Home") audio.currentTime = 0;
+    else if (e.key === "End") audio.currentTime = d;
+    else if (e.key === " ") { audio.paused ? audio.play() : audio.pause(); }
+    else return;
+    e.preventDefault();
+    draw();
+    updateTime();
+  });
+
+  window.addEventListener("resize", draw);
+
+  /* ---------- Save ---------- */
+
+  function fileName() {
+    const base = filenameEl.value.replace(/\.wav$/i, "").replace(/[\\/:*?"<>|]+/g, "-").trim();
+    return (base || "track") + ".wav";
+  }
+
+  async function save() {
+    if (!currentBlob) return;
+    const name = fileName();
+
+    if ("showSaveFilePicker" in window) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: name,
+          types: [{ description: "WAV audio", accept: { "audio/wav": [".wav"] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(currentBlob);
+        await writable.close();
+        savedEl.textContent = "Saved as " + handle.name + ".";
+      } catch (err) {
+        if (err.name !== "AbortError") savedEl.textContent = "Could not save the file: " + err.message;
+      }
+      return;
+    }
+
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    savedEl.textContent = "Downloaded as " + name + " to your browser's download folder.";
+  }
+
+  saveBtn.addEventListener("click", save);
+  generateBtn.addEventListener("click", generate);
+  promptEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !generateBtn.disabled) { e.preventDefault(); generate(); }
+  });
+
+  loadConfig();
+})();
+</script>
+</body>
+</html>
