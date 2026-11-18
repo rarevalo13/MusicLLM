@@ -13,10 +13,14 @@ explore_genres.py ──> jamendo_metadata.parquet  (tags for every track, no au
   │                                         └─ extract_audio.py + .slurm  (cluster: every shard)
   └─ download_genres.py + .slurm ──> genre_tracks/<genre>/*.mp3           (cluster: N per genre)
 
-prepare_lora_data.py ──> <genre>_lora_data/  (30 s WAV clips + .txt captions)
+split_holdout.py ──> genre_splits/<genre>/    (train/heldout symlinks; whole artists held out)
+prepare_lora_data.py ──> <genre>_lora_data/  (30 s WAV clips + .txt captions; called by make_latents.slurm)
+make_latents.slurm ──> <genre>_latents/ + heldout_clips/<genre>/   (Hawk GPU: cut clips, pre-encode)
+train_lora.slurm ──> runs/<genre>/*.ckpt      (Hawk GPU: LoRA on small-music-base)
 stable-audio-3/scripts/train_lora.py ──> LoRA checkpoint (.ckpt)          (cluster GPU)
 compare_lora.py ──> lora_comparison/         (same prompts, LoRA off vs on)
 website/website.py ──> http://127.0.0.1:8000  (web demo: base vs LoRA, same seed)
+hawk_container.sh ──> runs Stable Audio steps in the Hawk container
 ```
 
 | Script | Purpose | Runs on |
@@ -26,7 +30,11 @@ website/website.py ──> http://127.0.0.1:8000  (web demo: base vs LoRA, same 
 | `download_sample.py` | Stream a few MP3s for local tests | Mac |
 | `download_genres.py` + `.slurm` | Download a balanced number of tracks per genre | Cluster |
 | `extract_audio.py` + `.slurm` | Extract every selected track, one shard at a time | Cluster |
+| `split_holdout.py` | Split each genre's MP3s into train/held-out artist links | Mac or cluster |
 | `prepare_lora_data.py` | Cut MP3s into captioned 30 s training clips | Mac or cluster |
+| `make_latents.slurm` | Cut training clips and pre-encode latents on a Hawk GPU | Hawk GPU |
+| `train_lora.slurm` | LoRA training on `<genre>_latents/` → `runs/<genre>/` | Hawk GPU |
+| `hawk_container.sh` | Run a command inside the Ubuntu container on Hawk | Hawk |
 | `compare_lora.py` | Generate the same prompts with the LoRA off and on | Cluster GPU |
 | `stable_audio_test.py` | One-off text-to-music test | Mac |
 | `website/website.py` | Web demo: prompt in, WAV out; base model and LoRA side by side | Mac or cluster GPU |
@@ -53,19 +61,24 @@ If the environment in `stable-audio-3/.venv310-clean` already exists, activate i
 you logged in with (approval is automatic). The base model `stable-audio-3-small-music-base`, the
 SAME-S autoencoder and the dataset are not gated.
 
-### Cluster
+### Cluster (Hawk)
+
+Hawk's login and compute nodes run RHEL 7.9 (glibc 2.17), too old for the PyTorch 2.7.1 wheels,
+so every Stable Audio step runs inside an Ubuntu 22.04 Singularity sandbox
+(`containers/ubuntu-22.04`, gitignored) through `./hawk_container.sh`. The data-download jobs
+use the conda env `musicllm` instead (`download_genres.slurm` activates it; override with
+`CONDA_ENV=`). The container and venv exist in the project's Hawk account; rebuilding them from
+scratch isn't scripted (see "How the container was built" in `HAWK_TRAINING_PLAN.md`), which is
+also the step-by-step for the whole training run.
 
 ```bash
 git clone --recurse-submodules git@github.com:rarevalo13/MusicLLM.git && cd MusicLLM
-python3 -m venv .venv          # the .slurm files activate ./.venv (override with VENV=...)
-.venv/bin/pip install -U huggingface_hub datasets pandas pyarrow numpy soundfile
-cd stable-audio-3 && uv sync --extra lora     # training environment (needs uv)
-uv run hf auth login
+./hawk_container.sh hf auth login       # accept the gated small-music license on HF first
 ```
 
-- `uv sync` installs PyTorch built for CUDA 12.6. For an older GPU driver, see "CUDA Version" in
-  `stable-audio-3/README.md`.
-- Set your partition on the `##SBATCH --partition=<cpu-partition>` line of both `.slurm` files.
+- Partitions are already set in the `.slurm` files: CPU `day-long`, GPU `gpu-day-long`.
+  `short`/`gpu-short` are the 2 h partitions for smoke tests, e.g. the training smoke test in
+  `HAWK_TRAINING_PLAN.md` step 1.
 - `jamendo_metadata.parquet` and `sample_tracks/` are ignored by git, so copy them to the cluster
   yourself.
 
@@ -159,18 +172,18 @@ because it downloads whole shards (about 0.47 GB each).
 ```bash
 python download_genres.py --genres rock hiphop --per-genre 2 --out genre_tracks_test   # local test, a few shards
 sbatch download_genres.slurm --per-genre 10 --out genre_tracks_smoke                   # cluster smoke test
-sbatch download_genres.slurm                                                           # full run: rock + hiphop, 1,500 each
+sbatch download_genres.slurm                                                           # full run: rock + hiphop, 3,300 each
 ```
 
 Options: `--genres` (required), `--per-genre` (1500), `--out` (`genre_tracks`), `--meta`
 (`jamendo_metadata.parquet`), `--min-sec` (60), `--max-sec` (600), `--max-per-artist` (20, `0` = no
 cap), `--seed` (0), `--workers` (4), `--scratch` (`$TMPDIR` or `/tmp`).
 
-The `.slurm` job (8 CPUs, 16 GB, 12 h) runs `--genres rock hiphop --per-genre 1500 --out
-genre_tracks` with one worker per CPU and `$TMPDIR` as scratch. Arguments after the script name
-override those defaults. If the job fails or times out, submit the same command again. The log is
-`slurm-download-genres-<jobid>.out`. Rough estimate for the full run: 260–330 shards (120–155 GB)
-pass through scratch and about 9 GB of MP3s are kept.
+The `.slurm` job (8 CPUs, 16 GB, 24 h, partition `day-long`) runs `--genres rock hiphop
+--per-genre 3300 --out genre_tracks` with one worker per CPU and `$TMPDIR` as scratch. Arguments
+after the script name override those defaults. If the job fails or times out, submit the same
+command again. The log is `slurm-download-genres-<jobid>.out`. Rough estimate for the full run:
+~640–700 shards (~300–330 GB) pass through scratch and about 17 GB of MP3s are kept.
 
 ### `extract_audio.py` + `extract_audio.slurm`
 
@@ -252,20 +265,27 @@ uv run python scripts/train_lora.py --model small-music-base --data_dir ../rock_
 
 ### `compare_lora.py`
 
-Generates three built-in rock prompts twice, with the LoRA off (strength 0) and on (strength 1),
-using the same seed so the LoRA is the only difference. The LoRA is trained on `small-music-base`
-and applied to the post-trained `small-music`.
+Generates three built-in prompts for one genre (`--genre rock|hiphop`, default `rock`) twice,
+with the LoRA off (strength 0) and on (strength 1), using the same seed so the LoRA is the only
+difference. The LoRA is trained on `small-music-base` and applied to the post-trained
+`small-music`.
 
 ```bash
 cd stable-audio-3
 uv run python ../compare_lora.py --lora lora_rock_test/<checkpoint>.ckpt
 ```
 
-Writes `lora_comparison/prompt0_base.wav`, `prompt0_lora.wav` and so on, in the folder you run it
-from. Edit `PROMPTS` in the script to test other genres.
+On Hawk, from the repo root (inside the container):
 
-Options: `--lora` (required, `.ckpt` or `.safetensors`), `--model` (`small-music`), `--duration`
-(30), `--out` (`lora_comparison`).
+```bash
+./hawk_container.sh python compare_lora.py --genre hiphop --lora runs/hiphop/<checkpoint>.ckpt --out lora_comparison/hiphop
+```
+
+Writes `lora_comparison/prompt0_base.wav`, `prompt0_lora.wav` and so on, in the folder you run it
+from.
+
+Options: `--lora` (required, `.ckpt` or `.safetensors`), `--genre` (`rock`), `--model`
+(`small-music`), `--duration` (30), `--out` (`lora_comparison`).
 
 ### `stable_audio_test.py`
 
@@ -323,6 +343,10 @@ the Seed box to generate the same track again.
 | `sample_tracks/` | 29 rock MP3s from `download_sample.py` | yes |
 | `genre_tracks*/`, `*_tracks/`, `audio_subset/` | Downloaded MP3s | yes |
 | `*_lora_data/` | Training clips from `prepare_lora_data.py` | yes |
+| `genre_splits/` | `split_holdout.py` train/heldout links + CSVs | yes |
+| `heldout_clips/`, `*_latents/` | Held-out WAV clips; pre-encoded latents | yes |
+| `runs/` | LoRA checkpoints from `train_lora.slurm` | yes |
+| `containers/` | Singularity image for Hawk (`ubuntu-22.04`) | yes |
 | `lora_comparison/`, `*.wav` | Generated audio | yes |
 | `slurm-*.out` | SLURM job logs | yes |
 | `stable-audio-3/` | Stable Audio 3 code | git submodule |

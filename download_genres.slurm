@@ -22,6 +22,7 @@ cd "$SLURM_SUBMIT_DIR"
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV:-musicllm}"
 export HF_HUB_DISABLE_PROGRESS_BARS=1
+export PYTHONUNBUFFERED=1   # write log lines as they happen, not in 8 KB chunks
 export HF_XET_CACHE="${TMPDIR:-/tmp}/hf_xet_cache"
 
 python download_genres.py --genres rock hiphop --per-genre 3300 --out genre_tracks \

@@ -37,10 +37,15 @@ foundation model locally.
 | `select_tracks.py` | `--genres X Y` → `selected_ids.txt` + `selected_metadata.csv` (instrumental, duration-filtered) | Mac |
 | `download_sample.py` | Streams dataset, saves first N matching tracks (`--ids`); skips existing files; resumes via `<out>/stream_state.pkl` (`--restart` rescans from row 0) | Mac (small N) |
 | `download_genres.py` | Balanced per-genre quotas (`--genres rock hiphop --per-genre 1500`) into `out/<genre>/`; skips tracks tagged with multiple requested genres; 60–600 s; `--max-per-artist 20`; walks shards in seeded random order; resumable via `manifest.csv` + `done_shards.txt` | Cluster |
-| `download_genres.slurm` | Batch job wrapper for `download_genres.py`; extra args override its defaults; resubmit to resume | Cluster CPU nodes |
+| `download_genres.slurm` | Batch job wrapper for `download_genres.py` (rock + hiphop, 3,300 each; partition `day-long`; activates conda env `musicllm`, override with `CONDA_ENV`); extra args override its defaults; resubmit to resume | Cluster CPU nodes |
 | `extract_audio.py` + `.slurm` | Full-scale extraction of `selected_ids.txt`: job array, 4 shards per task (2,272 shards → `--array=0-567`) | Cluster CPU nodes |
 | `prepare_lora_data.py` | Cuts MP3s into 30 s stereo 44.1 kHz WAV chunks + matching `.txt` captions from Jamendo tags (`--genre-tag` also sets the default `--label` and `--out`; `--max-chunks`) | Mac or cluster |
-| `compare_lora.py` | Same prompts with LoRA strength 0 vs 1, same `seed=`, for A/B listening; run from `stable-audio-3/` as `../compare_lora.py` | Cluster GPU |
+| `split_holdout.py` | Holds out whole artists per genre (`--per-genre 300`, seeded) before clips are cut: `genre_splits/<genre>/{train,heldout}/` = relative symlinks into `genre_tracks/` + `train.csv`/`heldout.csv`. Never moves MP3s (`download_genres.py` drops manifest rows with missing MP3s and refills quotas); re-runs keep the held-out artists | Cluster (login node) |
+| `make_latents.slurm` | GPU job per genre: cuts `genre_splits/<genre>/train` to node-local scratch and the held-out tracks to `heldout_clips/<genre>/` (WAV), pre-encodes with `same-s` (`--sample_size 1327104`) into `<genre>_latents/`, checks clip/latent counts; refuses a non-empty `<genre>_latents/` | Cluster GPU |
+| `train_lora.slurm` | GPU job per genre: `train_lora.py` on `<genre>_latents/` (small-music-base, rank 16, dora-rows, batch 4, 6,000 steps, checkpoint every 1,000) → `runs/<genre>/`; extra args override | Cluster GPU |
+| `hawk_container.sh` | Runs a command in the Ubuntu 22.04 Singularity sandbox (`containers/ubuntu-22.04`) with `stable-audio-3/.venv/bin` first on PATH; binds the NVIDIA driver libraries on GPU nodes | Cluster |
+| `HAWK_TRAINING_PLAN.md` | The user's step-by-step for the full Hawk run, including the Hugging Face setup | — |
+| `compare_lora.py` | Same prompts with LoRA strength 0 vs 1, same `seed=`, for A/B listening; `--genre rock\|hiphop` picks the built-in prompts. On Hawk run from the repo root as `./hawk_container.sh python compare_lora.py`; with uv, from `stable-audio-3/` as `../compare_lora.py` | Cluster GPU |
 | `stable_audio_test.py` | One-off text-to-audio test with `small-music` | Mac |
 | `website/website.py` + `static/index.html` | Tyler's Flask web demo on `small-music`: prompt → WAV; `--lora NAME=PATH` (repeatable) adds a base/LoRA selector and same-seed side-by-side compare; seed box; serves `127.0.0.1:8000` (`--host`, `--port`) | Mac or cluster GPU |
 
@@ -58,6 +63,14 @@ on Colab so far (Nov 15, below), not on the cluster. Verify on the cluster befor
 `small-music` defaults (8 steps, CFG 1), 120 s duration cap, seed box, LoRA selector + base
 comparison, port 8000, complete `website/REQUIREMENTS.txt`. Its LoRA option has only been tested
 with a fake model; try it next with the Nov 15 checkpoint.
+**Nov 17 (later):** Hawk inspected over SSH (facts under Environments). Built an Ubuntu 22.04
+Singularity sandbox and the Stable Audio env inside it. `pre_encode_dataset.py` on 200 clips on an
+A100: 0.27 s per clip steady state with `--sample_size 1327104`; latents (256, 323) float32 with the
+caption in each `.json`. `train_lora.py` got as far as loading the model, then stopped: `small-music-base` loads its
+T5-Gemma text encoder from the gated `small-music` repo, so Hawk needs `hf auth login`.
+**User decision: train both genres on Hawk, not Colab.** Added `split_holdout.py`,
+`make_latents.slurm`, `train_lora.slurm`, `hawk_container.sh`; the user's walkthrough is
+`HAWK_TRAINING_PLAN.md`.
 
 ## Environments
 
@@ -74,15 +87,39 @@ with a fake model; try it next with the Nov 15 checkpoint.
   uv sync --extra lora      # lora extra (pytorch_lightning) required for training
   uv run hf auth login      # accept model licenses on Hugging Face first
   ```
-  Run its tools with `uv run python ...` from inside `stable-audio-3/`.
-- **Cluster (department HPC):**
+  Run its tools with `uv run python ...` from inside `stable-audio-3/` (not on Hawk: see below).
+- **Google Colab (fallback):** ran the Nov 15 smoke test and was briefly the planned training
+  environment (with a paid Google Drive) until the Hawk container worked on Nov 17. Colab
+  preinstalls matplotlib and wandb, which `train_lora.py` needs but the project doesn't list.
+  Downloading on the Mac measured ~27 MB/s from Hugging Face on one stream.
+  `pre_encode_dataset.py` uses CUDA or falls back to CPU (no MPS); on the Mac its DataLoader
+  workers crash (`name 'Path' is not defined`, then endless retries) and the default
+  `--sample_size` (~285 s) wastes memory: don't encode on the Mac.
+- **Cluster: Hawk** (`ssh hawk`, user `arevalor`, repo `~/MusicLLM`); the training environment
+  since Nov 17. Off campus, SSH can time out (it did from the Mac on Nov 17).
   - 48 CPU nodes (24 cores, 128 GB RAM, 340 GB local scratch): preprocessing, downloads.
   - 1 large-memory node (72 cores, 4 TB RAM): rarely needed.
   - 6 GPU nodes, each 4× A100 40GB PCIe (1.7 TB NVMe scratch): LoRA training.
     One GPU per run is plenty; use nodes for parallel experiments, not multi-node jobs.
+    Driver 550.163.01 (CUDA 12.4).
   - 1 GPU node, 3× L40S 48GB: inference, evaluation, demo serving.
-  - Scheduler assumed to be SLURM (unconfirmed). Use Apptainer or venv/conda, not Docker.
-  - Node-local scratch is temporary: write results to persistent storage.
+  - SLURM partitions: CPU `short` (default, 2 h), `day-long`, `week-long`, `month-long`,
+    `interactive-cpu` (2 days); A100 `gpu-short` (2 h), `gpu-day-long`, `gpu-week-long`,
+    `gpu-month-long`; also `l40s-*` and `highmem-*`. Compute nodes reach Hugging Face and PyPI.
+  - **RHEL 7.9, glibc 2.17** (system Python 3.6): PyTorch 2.7.1 can't run natively. Stable Audio
+    runs in an Ubuntu 22.04 Singularity sandbox, `containers/ubuntu-22.04` (not in git), via
+    `./hawk_container.sh`. It was built from Ubuntu's base rootfs because Singularity 3.5.3 can't
+    pull current OCI images and lacks mksquashfs; a CA bundle was added. There's no Apptainer.
+    `--nv` alone doesn't expose the driver in the sandbox, so `hawk_container.sh` binds libcuda,
+    libnvidia-ml, libnvidia-ptxjitcompiler and libnvidia-nvvm into `/usr/lib/x86_64-linux-gnu`.
+  - Stable Audio env: `stable-audio-3/.venv` (`uv sync --extra lora` inside the container; uv's
+    own Python 3.10; torch 2.7.1+cu126) plus pandas 2.3.3, pyarrow 25.0.1, matplotlib 3.10.8 and
+    wandb 0.31.0 via `uv pip install` (HAWK_TRAINING_PLAN.md step 0.4). **Don't `uv sync` there:**
+    it removes those. `uv` is at `~/.local/bin/uv`, not on PATH.
+  - Download jobs use the conda env `musicllm` (Python 3.10, no torch). The old repo `.venv` is
+    Python 3.7: unusable.
+  - Home is NFS (`/nfs/storage1/home`, 26 TB shared, ~5.2 TB free on Nov 17). Node-local scratch is
+    temporary: write results to persistent storage.
 
 ## Common commands
 
@@ -92,25 +129,27 @@ python explore_genres.py
 python select_tracks.py --genres rock                 # selected_ids.txt = rock selection
 python download_sample.py --n 30 --ids selected_ids.txt --out sample_tracks   # 29 rock tracks already there
 python prepare_lora_data.py --audio sample_tracks --out rock_lora_data       # 30-track smoke-test data
-
-# Cluster CPU jobs (submit from the repo root; set the partition in the .slurm files first)
-sbatch download_genres.slurm --per-genre 10 --out genre_tracks_smoke   # smoke test first
-sbatch download_genres.slurm                                           # rock + hiphop, 1500 each
-python prepare_lora_data.py --audio genre_tracks/rock --genre-tag rock
 python prepare_lora_data.py --audio genre_tracks/hiphop --genre-tag hiphop   # "Instrumental hip hop" → hiphop_lora_data/
 
-# Training (cluster GPU node, inside stable-audio-3/)
+# Hawk (submit from ~/MusicLLM; full walkthrough in HAWK_TRAINING_PLAN.md)
+./hawk_container.sh hf auth login                                       # once
+sbatch download_genres.slurm                                            # rock + hiphop, 3,300 each → genre_tracks/
+./hawk_container.sh python split_holdout.py --tracks genre_tracks --per-genre 300
+sbatch make_latents.slurm rock; sbatch make_latents.slurm hiphop        # → <genre>_latents/, heldout_clips/<genre>/
+sbatch train_lora.slurm rock; sbatch train_lora.slurm hiphop            # → runs/<genre>/*.ckpt
+srun -p gpu-short --gres=gpu:1 -c 4 --mem=16G -t 30 ./hawk_container.sh python compare_lora.py \
+    --genre rock --lora runs/rock/<checkpoint>.ckpt --out lora_comparison/rock
+
+# Training elsewhere (any CUDA machine with uv, inside stable-audio-3/)
 uv run python scripts/train_lora.py \
     --model small-music-base --data_dir ../rock_lora_data \
     --rank 16 --adapter_type dora-rows --exclude seconds_total \
     --duration 30 --steps 1000 --save_dir ./lora_rock_test
-
-# A/B comparison (inside stable-audio-3/)
 uv run python ../compare_lora.py --lora lora_rock_test/<checkpoint>.ckpt
 
 # Web demo (Mac: in .venv310-clean after pip install -r website/REQUIREMENTS.txt)
 python website/website.py --lora rock=path/to/rock.ckpt          # http://127.0.0.1:8000
-# Web demo (cluster, inside stable-audio-3/)
+# Web demo (CUDA machine with uv, inside stable-audio-3/)
 uv run --with flask==3.1.3 python ../website/website.py --lora rock=lora_rock_test/<checkpoint>.ckpt
 ```
 
@@ -166,6 +205,17 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
   4,637 artists; hip hop 14,187 / 2,016 artists (one artist has 563 → per-artist cap matters).
 - Full 1,500-per-genre job: hip hop is the bottleneck; estimated ~260–330 shards scanned
   (~120–155 GB through scratch), ~9 GB of MP3s kept.
+- **Target: ~3,000 training tracks per genre plus ~300 held out (user decision, Nov 17), so the
+  download asks for 3,300 per genre.** Simulating `download_genres.py` (shards = string-sorted IDs
+  split evenly, `random.Random(0)` shard order, 20-per-artist cap): 3,300 per genre → ~636–691
+  shards (~300–325 GB through scratch); MP3s ~9.2 GB rock (~1,090 artists) + ~7.5 GB hip hop
+  (~865 artists). The simulation reproduces the real shard order (Hawk smoke-test log), but the real
+  run met the 10-track quotas one shard later, so treat these numbers as estimates.
+  With the default `--max-chunks 4`: ~12,200 rock / ~12,000 hip hop clips before the hold-out,
+  ~11,100 / ~10,900 after; 5.29 MB of WAV and ~0.33 MB of fp32 `same-s` latent (256 × 323) per
+  30 s clip, so ~3.7 GB of latents per genre. `--max-chunks 2` halves both.
+  The trainer's latent loader scans subfolders, so several latent folders can be trained together
+  under one `--encoded_dir`.
 
 ## Rules and constraints
 
@@ -198,25 +248,23 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
 
 ## Next steps
 
-1. Commit + push the scripts; copy `jamendo_metadata.parquet` and `sample_tracks/` (both
-   gitignored) to the cluster.
-2. Cluster setup: confirm SLURM, partitions and outbound internet; data venv `.venv`;
-   `cd stable-audio-3 && uv sync --extra lora`; accept the HF terms for
-   `stabilityai/stable-audio-3-small-music` (gated, auto-approved; `small-music-base`, `SAME-S`
-   and the dataset are not gated); `hf auth login`.
-3. Done on Colab as a 100-step smoke test (Nov 15, see Status). Still to do on the cluster: the
-   same test on one A100 (`prepare_lora_data.py` → `train_lora.py` 1000 steps → `compare_lora.py`).
-4. `sbatch download_genres.slurm --per-genre 10 --out genre_tracks_smoke`, check
-   `manifest.csv`, then submit the full 3,000-track job.
-5. Train per-genre LoRAs (pre-encode with `same-s` first); run ablations.
-6. Build the evaluation pipeline; try the web demo (`website/`) with the Nov 15 rock checkpoint,
-   then the per-genre LoRAs; finish slides before Thanksgiving.
+Steps 2–5 are the user's to run, following `HAWK_TRAINING_PLAN.md`.
+
+1. Push the Hawk scripts; on Hawk `git stash && git pull` (the stash is the user's old conda edit
+   to `download_genres.slurm`, now built in).
+2. User: Hugging Face token + `./hawk_container.sh hf auth login`; plan step 0.4 packages.
+3. Training smoke test on Hawk (200 steps on `~/MusicLLM_tests/latents200_gpu`): confirms the
+   gated download works and gives the it/s for sizing the 6,000-step runs.
+4. Download 3,300 per genre → `split_holdout.py` → `make_latents.slurm` per genre →
+   `train_lora.slurm` per genre.
+5. `compare_lora.py --genre` per genre; web demo with both LoRAs (and the Nov 15 rock checkpoint).
+6. Evaluation pipeline (FAD vs `heldout_clips/<genre>/`, CLAP, blind A/B test), ablations;
+   finish slides before Thanksgiving.
 
 ## Open questions to verify
 
-- Whether the cluster uses SLURM, its partition names (fill in `##SBATCH --partition` in both
-  `.slurm` files) and whether compute nodes have outbound internet (the download jobs need it;
-  otherwise run them on a login/transfer node).
+- Hawk's download speed from Hugging Face, and training speed on its A100 40GB with latents at
+  batch size 4 (the plan's smoke test measures the latter).
 - Whether all Jamendo MP3s are 44.1 kHz: all 29 in `sample_tracks/` are 44.1 kHz stereo;
   check `prepare_lora_data.py` skip messages at scale (the trainer resamples on load anyway).
 - JamendoMaxCaps captions: the HF repo has `final_caption30sec.jsonl` (787 MB). Its format hasn't

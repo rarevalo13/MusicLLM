@@ -36,4 +36,4 @@ if [ -e /usr/lib64/libcuda.so.1 ]; then
 fi
 exec singularity -s exec "${opts[@]}" "$IMAGE" \
     env PATH="$VENV/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-        SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt "$@"
+        SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt PYTHONUNBUFFERED=1 "$@"
