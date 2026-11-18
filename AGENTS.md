@@ -47,12 +47,17 @@ foundation model locally.
 **Status (Nov 8):** data scripts smoke-tested locally against the real dataset
 (`download_sample.py` resume/skip; `download_genres.py` on a few shards: quotas, genre
 exclusivity, resume, refill; `prepare_lora_data.py` rock + hip hop captions). The `.slurm`
-files were only dry-run with a stub `python`; `train_lora.py` and `compare_lora.py` have
-**not been run yet** (need a CUDA GPU). Verify on the cluster before scaling up.
+files were only dry-run with a stub `python`. `train_lora.py` and `compare_lora.py` have only run
+on Colab so far (Nov 15, below), not on the cluster. Verify on the cluster before scaling up.
+**Nov 15:** 100-step rock smoke test on Colab (A100 80GB) in `lora_training.ipynb`:
+`train_lora.py` on the 20 clips in `rock_lora_smoke/` (rank 16, `dora-rows`,
+`--exclude seconds_total`, 10.7M trainable params) → `epoch=4-step=100.ckpt` (41 MB), then
+`compare_lora.py` → 3 base/LoRA pairs. The checkpoint and comparisons are on Google Drive in
+`MusicLLM_runs/lora_rock_smoke/`, not in the repo.
 **Nov 17:** Tyler's website merged into main as a squash commit (authored by him), then fixed:
 `small-music` defaults (8 steps, CFG 1), 120 s duration cap, seed box, LoRA selector + base
-comparison, port 8000, complete `website/REQUIREMENTS.txt`. Its LoRA path is only tested against
-a fake model until the first real LoRA exists.
+comparison, port 8000, complete `website/REQUIREMENTS.txt`. Its LoRA option has only been tested
+with a fake model; try it next with the Nov 15 checkpoint.
 
 ## Environments
 
@@ -199,13 +204,13 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
    `cd stable-audio-3 && uv sync --extra lora`; accept the HF terms for
    `stabilityai/stable-audio-3-small-music` (gated, auto-approved; `small-music-base`, `SAME-S`
    and the dataset are not gated); `hf auth login`.
-3. Run the 29-track rock LoRA test end to end on one A100
-   (`prepare_lora_data.py` → `train_lora.py` 1000 steps → `compare_lora.py`).
+3. Done on Colab as a 100-step smoke test (Nov 15, see Status). Still to do on the cluster: the
+   same test on one A100 (`prepare_lora_data.py` → `train_lora.py` 1000 steps → `compare_lora.py`).
 4. `sbatch download_genres.slurm --per-genre 10 --out genre_tracks_smoke`, check
    `manifest.csv`, then submit the full 3,000-track job.
 5. Train per-genre LoRAs (pre-encode with `same-s` first); run ablations.
-6. Build the evaluation pipeline; try the web demo (`website/`) with the first real LoRAs;
-   finish slides before Thanksgiving.
+6. Build the evaluation pipeline; try the web demo (`website/`) with the Nov 15 rock checkpoint,
+   then the per-genre LoRAs; finish slides before Thanksgiving.
 
 ## Open questions to verify
 
