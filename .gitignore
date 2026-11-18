@@ -10,6 +10,8 @@ sample_tracks/
 *_tracks/
 genre_tracks*/
 *_lora_data/
+*_lora_smoke/
+*_lora_smoke.tar.gz
 audio_subset/
 lora_comparison/
 slurm-*.out
