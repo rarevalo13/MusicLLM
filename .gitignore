@@ -20,3 +20,4 @@ selected_metadata.csv
 *.safetensors
 *_latents/
 lightning_logs/
+.vscode/

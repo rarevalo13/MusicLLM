@@ -16,6 +16,7 @@ explore_genres.py ──> jamendo_metadata.parquet  (tags for every track, no au
 prepare_lora_data.py ──> <genre>_lora_data/  (30 s WAV clips + .txt captions)
 stable-audio-3/scripts/train_lora.py ──> LoRA checkpoint (.ckpt)          (cluster GPU)
 compare_lora.py ──> lora_comparison/         (same prompts, LoRA off vs on)
+website/website.py ──> http://127.0.0.1:8000  (web demo: base vs LoRA, same seed)
 ```
 
 | Script | Purpose | Runs on |
@@ -28,6 +29,7 @@ compare_lora.py ──> lora_comparison/         (same prompts, LoRA off vs on)
 | `prepare_lora_data.py` | Cut MP3s into captioned 30 s training clips | Mac or cluster |
 | `compare_lora.py` | Generate the same prompts with the LoRA off and on | Cluster GPU |
 | `stable_audio_test.py` | One-off text-to-music test | Mac |
+| `website/website.py` | Web demo: prompt in, WAV out; base model and LoRA side by side | Mac or cluster GPU |
 
 ## Setup
 
@@ -275,9 +277,41 @@ python stable_audio_test.py
 ```
 
 The first run downloads the model weights. Warnings that Flash Attention is disabled are harmless.
-With `small-music`, `cfg_scale` has no effect and raising `steps` above the default 8 doesn't
-necessarily help (the script uses 50). Without a script:
+With `small-music`, keep `cfg_scale` at 1: other values change the output and slow generation down,
+even though the upstream docs say it has no effect. Raising `steps` above the default 8 doesn't
+necessarily help (the script uses 50 steps and CFG 5). Without a script:
 `stable-audio --model small-music -p "lo-fi hip hop beat, 90 BPM" --duration 30 -o beat.wav`.
+
+### Web demo (`website/`)
+
+A local page for the demo: type a prompt, pick the base model or a genre LoRA, listen and save the
+WAV. With a LoRA selected, "Also generate with the base model" makes the same track (same seed and
+settings) with the LoRA off, so the two can be compared side by side.
+
+Mac, in the Stable Audio 3 environment:
+
+```bash
+source stable-audio-3/.venv310-clean/bin/activate
+pip install -r website/REQUIREMENTS.txt
+python website/website.py                                   # open http://127.0.0.1:8000
+python website/website.py --lora rock=path/to/rock.ckpt --lora hiphop=path/to/hiphop.ckpt
+```
+
+Cluster GPU node, inside `stable-audio-3/`:
+
+```bash
+uv run --with flask==3.1.3 python ../website/website.py --lora rock=lora_rock_test/<checkpoint>.ckpt
+```
+
+Then forward the port from your laptop over SSH, for example `ssh -L 8000:127.0.0.1:8000 <gpu-node>`
+(through the login node if needed).
+
+Options: `--lora NAME=PATH` (`.ckpt` or `.safetensors`, repeatable; `NAME` defaults to the file
+name), `--host` (`127.0.0.1`), `--port` (8000; on macOS, AirPlay Receiver already uses 5000).
+
+The settings default to what `small-music` is tuned for: 8 steps and CFG scale 1. Duration goes up to
+120 s, the longest `small-music` generates. The seed used is shown under each track; type it into
+the Seed box to generate the same track again.
 
 ## Files and folders
 

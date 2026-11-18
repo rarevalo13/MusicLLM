@@ -1,2 +1,5 @@
-    Need the following installed for the website
-    pip install flask
+# Web demo dependencies. Install them into the Stable Audio 3 environment, which already provides
+# stable_audio_3, torch, numpy and soundfile (stable_audio_3 is not on PyPI: see Setup in the README).
+flask==3.1.3
+numpy
+soundfile

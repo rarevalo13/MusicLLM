@@ -42,12 +42,17 @@ foundation model locally.
 | `prepare_lora_data.py` | Cuts MP3s into 30 s stereo 44.1 kHz WAV chunks + matching `.txt` captions from Jamendo tags (`--genre-tag` also sets the default `--label` and `--out`; `--max-chunks`) | Mac or cluster |
 | `compare_lora.py` | Same prompts with LoRA strength 0 vs 1, same `seed=`, for A/B listening; run from `stable-audio-3/` as `../compare_lora.py` | Cluster GPU |
 | `stable_audio_test.py` | One-off text-to-audio test with `small-music` | Mac |
+| `website/website.py` + `static/index.html` | Tyler's Flask web demo on `small-music`: prompt → WAV; `--lora NAME=PATH` (repeatable) adds a base/LoRA selector and same-seed side-by-side compare; seed box; serves `127.0.0.1:8000` (`--host`, `--port`) | Mac or cluster GPU |
 
 **Status (Nov 8):** data scripts smoke-tested locally against the real dataset
 (`download_sample.py` resume/skip; `download_genres.py` on a few shards: quotas, genre
 exclusivity, resume, refill; `prepare_lora_data.py` rock + hip hop captions). The `.slurm`
 files were only dry-run with a stub `python`; `train_lora.py` and `compare_lora.py` have
 **not been run yet** (need a CUDA GPU). Verify on the cluster before scaling up.
+**Nov 17:** Tyler's website merged into main as a squash commit (authored by him), then fixed:
+`small-music` defaults (8 steps, CFG 1), 120 s duration cap, seed box, LoRA selector + base
+comparison, port 8000, complete `website/REQUIREMENTS.txt`. Its LoRA path is only tested against
+a fake model until the first real LoRA exists.
 
 ## Environments
 
@@ -55,6 +60,8 @@ files were only dry-run with a stub `python`; `train_lora.py` and `compare_lora.
   (Python 3.10; has `stable_audio_3`, datasets, pandas, pyarrow, soundfile) →
   `source stable-audio-3/.venv310-clean/bin/activate`. There is no root `.venv`.
   Data-script deps: `pip install -U huggingface_hub datasets pandas pyarrow numpy soundfile`.
+  Port 5000 is taken by macOS AirPlay Receiver (ControlCenter), so the web demo defaults to
+  8000. Flask isn't in `.venv310-clean` until you run `pip install -r website/REQUIREMENTS.txt`.
 - **Stable Audio 3:** NOT on PyPI. Vendored as the git submodule `stable-audio-3/`
   (`git submodule update --init --recursive`). For training:
   ```bash
@@ -95,6 +102,11 @@ uv run python scripts/train_lora.py \
 
 # A/B comparison (inside stable-audio-3/)
 uv run python ../compare_lora.py --lora lora_rock_test/<checkpoint>.ckpt
+
+# Web demo (Mac: in .venv310-clean after pip install -r website/REQUIREMENTS.txt)
+python website/website.py --lora rock=path/to/rock.ckpt          # http://127.0.0.1:8000
+# Web demo (cluster, inside stable-audio-3/)
+uv run --with flask==3.1.3 python ../website/website.py --lora rock=lora_rock_test/<checkpoint>.ckpt
 ```
 
 ## Stable Audio 3 API notes
@@ -113,10 +125,14 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
   intended for fine-tuning (train LoRAs on this; needs more steps if generating from it).
   LoRAs trained on `small-music-base` are applied to `small-music` at inference.
 - `steps` = number of reverse (denoising) sampling steps at inference (default 8; use ~50 for
-  `-base` models); `cfg_scale` = classifier-free guidance strength (default 1.0; **no effect on
-  post-trained checkpoints**). Keep both fixed within any comparison.
+  `-base` models); `cfg_scale` = classifier-free guidance strength (default 1.0). Upstream docs say
+  it has no effect on post-trained checkpoints, but the DiT applies CFG whenever `cfg_scale != 1.0`
+  (`stable_audio_3/models/dit.py`), and on `small-music` it changes the output and slows generation:
+  keep 1.0 there. Keep both fixed within any comparison.
 - `generate()` re-seeds torch itself (`seed=-1` → random), so `torch.manual_seed()` before it
   does nothing: always pass `seed=`.
+- `generate()` caps output at 120 s (`sample_size=5292032` samples at 44.1 kHz); a longer
+  `duration` silently comes back as 120 s.
 - Training data format: folder of audio files, each with a same-named `.txt` caption.
 - `scripts/train_lora.py` flags: `--model` must be a `-base` model; output dir is `--save_dir`
   (upstream `docs/workflows/lora.md` shows `--output_dir`, which does not exist); `--duration`
@@ -172,7 +188,8 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
 - Ablations: LoRA rank (8/16/32), dataset size.
 - Failure analysis: off-genre prompts, long-form structure, artifacts, overfitting
   (outputs copying training songs).
-- Demo: Gradio app with prompt box, duration slider, base/LoRA/side-by-side toggle.
+- Demo: `website/` (Flask) with prompt box, duration slider, seed, base/LoRA selector and
+  same-seed side-by-side compare.
 
 ## Next steps
 
@@ -187,7 +204,8 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
 4. `sbatch download_genres.slurm --per-genre 10 --out genre_tracks_smoke`, check
    `manifest.csv`, then submit the full 3,000-track job.
 5. Train per-genre LoRAs (pre-encode with `same-s` first); run ablations.
-6. Build the evaluation pipeline and Gradio demo; finish slides before Thanksgiving.
+6. Build the evaluation pipeline; try the web demo (`website/`) with the first real LoRAs;
+   finish slides before Thanksgiving.
 
 ## Open questions to verify
 

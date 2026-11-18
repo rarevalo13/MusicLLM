@@ -103,7 +103,45 @@
     line-height: 1.4;
   }
 
+  .setting p code { white-space: nowrap; font-size: 0.85em; }
+
   .control { display: flex; align-items: center; gap: 0.9rem; }
+
+  .model-control { flex-direction: column; align-items: stretch; gap: 0.6rem; }
+
+  select {
+    width: 100%;
+    padding: 0.5rem 0.6rem;
+    border: 1.5px solid var(--ink);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--ink);
+    font: inherit;
+    font-weight: 600;
+  }
+
+  select:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  .compare-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+    font-weight: 400;
+    line-height: 1.4;
+    cursor: pointer;
+  }
+
+  .compare-option input {
+    flex: none;
+    width: 1rem;
+    height: 1rem;
+    margin: 0.2rem 0 0;
+    accent-color: var(--blue);
+  }
+
+  .compare-option input:disabled { cursor: not-allowed; }
 
   input[type="range"] {
     flex: 1;
@@ -123,6 +161,8 @@
     font-weight: 600;
     text-align: right;
   }
+
+  #seed { width: 7.5rem; }
 
   .unit { margin-left: -0.5rem; color: var(--muted); font-size: 0.9rem; min-width: 2.2rem; }
 
@@ -199,6 +239,18 @@
     .busy-bar::before { animation: none; width: 100%; opacity: 0.6; }
   }
 
+  .busy-what { color: #b4c0d2; min-height: 1.4em; }
+
+  .track + .track {
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.18);
+  }
+
+  .track-title { margin: 0 0 0.75rem; font-size: 1.05rem; font-weight: 600; }
+
+  #tracks.compare .wave { height: 110px; }
+
   .wave {
     position: relative;
     height: 160px;
@@ -268,6 +320,10 @@
     .output { position: static; min-height: 0; }
     .setting { grid-template-columns: minmax(0, 1fr); }
   }
+
+  @media (min-width: 861px) {
+    .output { max-height: calc(100vh - 3rem); overflow-y: auto; }
+  }
 </style>
 </head>
 <body>
@@ -283,6 +339,22 @@
     <div class="settings" role="group" aria-label="Generation settings">
       <div class="setting">
         <div>
+          <label class="field-name" for="model">Model</label>
+          <p id="model-desc">Pick a LoRA to generate with it instead of the base model.</p>
+          <p id="model-desc-none" hidden>No LoRAs loaded. Start website.py with
+            <code>--lora NAME=PATH</code> to add them.</p>
+        </div>
+        <div class="control model-control">
+          <select id="model" aria-label="Model">
+            <option value="">Base model</option>
+          </select>
+          <label class="compare-option"><input type="checkbox" id="compare" disabled>
+            Also generate with the base model (same seed)</label>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div>
           <label class="field-name" for="duration-num">Duration</label>
           <p>How long the track is. Longer tracks take longer to generate.</p>
         </div>
@@ -296,7 +368,8 @@
       <div class="setting">
         <div>
           <label class="field-name" for="steps-num">Steps</label>
-          <p>How many passes the model makes to refine the sound. More steps usually add detail, up to a point, and take proportionally longer.</p>
+          <p>How many passes the model makes to refine the sound. small-music is tuned for 8 steps;
+            more take proportionally longer and don't necessarily sound better.</p>
         </div>
         <div class="control">
           <input type="range" id="steps-range" step="1" aria-label="Steps slider">
@@ -308,11 +381,23 @@
       <div class="setting">
         <div>
           <label class="field-name" for="cfg_scale-num">CFG scale</label>
-          <p>How strictly the model follows your prompt. Low values sound looser and more varied. High values stick closer to the prompt but can sound harsher.</p>
+          <p>How strictly the model follows your prompt. small-music is tuned for CFG scale 1;
+            going above 1 makes each step slower and can sound harsher.</p>
         </div>
         <div class="control">
           <input type="range" id="cfg_scale-range" step="0.5" aria-label="CFG scale slider">
           <input type="number" id="cfg_scale-num" step="0.1" inputmode="decimal">
+          <span class="unit"></span>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div>
+          <label class="field-name" for="seed">Seed</label>
+          <p>The same seed and settings give the same track. Leave blank for a random seed.</p>
+        </div>
+        <div class="control">
+          <input type="number" id="seed" min="0" max="4294967295" step="1" placeholder="Random">
           <span class="unit"></span>
         </div>
       </div>
@@ -331,34 +416,40 @@
 
     <div id="state-busy" hidden>
       <p><strong>Generating your track.</strong> Keep this tab open.</p>
+      <p class="busy-what" id="busy-what"></p>
       <div class="busy-bar" aria-hidden="true"></div>
       <p id="elapsed">0 seconds elapsed</p>
     </div>
 
     <div id="state-ready" hidden>
-      <div class="wave" id="wave" tabindex="0" role="slider" aria-label="Seek through the track"
+      <div id="tracks"></div>
+    </div>
+  </section>
+
+  <template id="track-template">
+    <article class="track" data-variant="">
+      <h3 class="track-title"></h3>
+      <div class="wave" tabindex="0" role="slider" aria-label="Seek through the track"
            aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
-        <canvas id="canvas"></canvas>
+        <canvas></canvas>
       </div>
       <div class="transport">
-        <button type="button" class="play" id="play">Play</button>
-        <span class="time" id="time">0:00 / 0:00</span>
+        <button type="button" class="play">Play</button>
+        <span class="time">0:00 / 0:00</span>
       </div>
-      <p class="meta" id="meta"></p>
-
+      <p class="meta"></p>
       <div class="save">
-        <label for="filename">File name</label>
+        <label class="filename-label">File name</label>
         <div class="name-row">
-          <input type="text" id="filename" autocomplete="off" spellcheck="false">
+          <input type="text" class="filename" autocomplete="off" spellcheck="false">
           <span>.wav</span>
         </div>
-        <button type="button" id="save">Save to your computer</button>
-        <p class="saved" id="saved" role="status"></p>
+        <button type="button" class="save-btn">Save to your computer</button>
+        <p class="saved" role="status"></p>
       </div>
-    </div>
-
-    <audio id="audio" preload="auto"></audio>
-  </section>
+      <audio preload="auto"></audio>
+    </article>
+  </template>
 </main>
 
 <script>
@@ -368,13 +459,11 @@
   const COLORS = { played: "#f5b82e", idle: "rgba(220, 230, 242, 0.38)" };
 
   const promptEl = $("prompt"), generateBtn = $("generate"), errorEl = $("error");
-  const audio = $("audio"), wave = $("wave"), canvas = $("canvas");
-  const playBtn = $("play"), timeEl = $("time"), metaEl = $("meta");
-  const filenameEl = $("filename"), saveBtn = $("save"), savedEl = $("saved");
+  const seedEl = $("seed"), modelEl = $("model"), compareEl = $("compare");
+  const busyWhatEl = $("busy-what"), tracksEl = $("tracks"), trackTemplate = $("track-template");
   const states = { empty: $("state-empty"), busy: $("state-busy"), ready: $("state-ready") };
 
-  let peaks = null, currentBlob = null, objectUrl = null, raf = 0, dragging = false;
-  let hasTrack = false, elapsedTimer = 0;
+  let tracks = [], hasTrack = false, elapsedTimer = 0, cardSeq = 0;
 
   /* ---------- Settings ---------- */
 
@@ -387,8 +476,8 @@
   }
 
   async function loadConfig() {
-    let cfg = { limits: { duration: [1, 180], steps: [1, 150], cfg_scale: [1, 15] },
-                defaults: { duration: 30, steps: 50, cfg_scale: 7 } };
+    let cfg = { limits: { duration: [1, 120], steps: [1, 150], cfg_scale: [1, 15] },
+                defaults: { duration: 30, steps: 8, cfg_scale: 1 }, loras: [] };
     try {
       const res = await fetch("/api/config");
       if (res.ok) cfg = await res.json();
@@ -407,6 +496,19 @@
       });
     }
     if (cfg.maxPromptChars) promptEl.maxLength = cfg.maxPromptChars;
+
+    const loras = cfg.loras || [];
+    for (const name of loras) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name + " LoRA";
+      modelEl.appendChild(opt);
+    }
+    const hasLoras = loras.length > 0;
+    modelEl.disabled = !hasLoras;
+    $("model-desc").hidden = !hasLoras;
+    $("model-desc-none").hidden = hasLoras;
+    syncCompare();
   }
 
   /* ---------- Panel state ---------- */
@@ -422,6 +524,11 @@
 
   /* ---------- Generate ---------- */
 
+  function syncCompare() {
+    compareEl.disabled = modelEl.value === "";
+  }
+  modelEl.addEventListener("change", syncCompare);
+
   async function generate() {
     errorEl.hidden = true;
     const prompt = promptEl.value.trim();
@@ -430,10 +537,20 @@
       promptEl.focus();
       return;
     }
-    const body = { prompt };
-    for (const k of KEYS) body[k] = parseFloat(num(k).value);
+    const settings = { prompt };
+    for (const k of KEYS) settings[k] = parseFloat(num(k).value);
+    if (seedEl.value.trim() !== "") settings.seed = Number(seedEl.value);
 
-    audio.pause();
+    const base = { key: "base", title: "Base model", lora: "", file: "base" };
+    const modelName = modelEl.value;
+    let variants = [base];
+    if (modelName !== "") {
+      const loraVariant = { key: modelName, title: modelName + " LoRA",
+                            lora: modelName, file: slugify(modelName) };
+      variants = compareEl.checked ? [base, loraVariant] : [loraVariant];
+    }
+
+    for (const t of tracks) t.audio.pause();
     generateBtn.disabled = true;
     generateBtn.textContent = "Generating…";
     showState("busy");
@@ -444,27 +561,46 @@
     };
     tick();
     elapsedTimer = setInterval(tick, 1000);
+    busyWhatEl.textContent = "";
 
     try {
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        let message = "The server could not generate this track.";
-        try { message = (await res.json()).error || message; } catch (_) {}
-        throw new Error(message);
+      const results = [];
+      let seedToSend = settings.seed;
+      for (let i = 0; i < variants.length; i++) {
+        const v = variants[i];
+        if (variants.length > 1) {
+          busyWhatEl.textContent = "Generating track " + (i + 1) + " of " + variants.length
+            + " (" + v.title + ")…";
+        }
+        const req = { prompt, duration: settings.duration, steps: settings.steps,
+                      cfg_scale: settings.cfg_scale, lora: v.lora };
+        if (seedToSend !== undefined) req.seed = seedToSend;
+        const t0 = performance.now();
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(req),
+        });
+        if (!res.ok) {
+          let message = "The server could not generate this track.";
+          try { message = (await res.json()).error || message; } catch (_) {}
+          throw new Error(message);
+        }
+        const blob = await res.blob();
+        const seedHeader = res.headers.get("X-Seed");
+        const seed = seedHeader === null ? NaN : Number(seedHeader);
+        if (seedToSend === undefined && seedHeader !== null) seedToSend = seed;
+        results.push({ v, blob, seed, seconds: (performance.now() - t0) / 1000 });
       }
-      const blob = await res.blob();
-      await showTrack(blob, body, (performance.now() - started) / 1000);
+      renderTracks(prompt, results, settings);
     } catch (err) {
       showError(err instanceof TypeError
-        ? "Could not reach the server. Check that app.py is still running in your terminal."
+        ? "Could not reach the server. Check that website.py is still running in your terminal."
         : err.message);
       showState(hasTrack ? "ready" : "empty");
     } finally {
       clearInterval(elapsedTimer);
+      busyWhatEl.textContent = "";
       generateBtn.disabled = false;
       generateBtn.textContent = "Generate music";
     }
@@ -506,119 +642,159 @@
     return Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
   }
 
-  async function showTrack(blob, settings, seconds) {
-    peaks = await computePeaks(blob);
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
-    currentBlob = blob;
-    objectUrl = URL.createObjectURL(blob);
-    audio.src = objectUrl;
+  function renderTracks(prompt, results, settings) {
+    for (const t of tracks) t.destroy();
+    tracks = [];
+    tracksEl.innerHTML = "";
+    tracksEl.classList.toggle("compare", results.length > 1);
     hasTrack = true;
-
-    filenameEl.value = slugify(settings.prompt);
-    savedEl.textContent = "";
-    metaEl.textContent = settings.duration + " seconds, " + settings.steps + " steps, CFG scale "
-      + settings.cfg_scale + ". Generated in " + Math.round(seconds) + " seconds, "
-      + (blob.size / 1048576).toFixed(1) + " MB.";
-    playBtn.textContent = "Play";
     showState("ready");
-    await new Promise((r) => (audio.readyState >= 1 ? r() : audio.addEventListener("loadedmetadata", r, { once: true })));
-    draw();
-    updateTime();
-  }
-
-  function draw() {
-    const dpr = window.devicePixelRatio || 1;
-    const w = wave.clientWidth, h = wave.clientHeight;
-    if (!w || !h) return;
-    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-    }
-    const ctx = canvas.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    if (!peaks) return;
-
-    const barW = 3, gap = 2;
-    const n = Math.max(1, Math.floor((w + gap) / (barW + gap)));
-    const progress = audio.duration ? audio.currentTime / audio.duration : 0;
-    const playedX = progress * w;
-
-    for (let i = 0; i < n; i++) {
-      const from = Math.floor((i / n) * peaks.length);
-      const to = Math.max(from + 1, Math.floor(((i + 1) / n) * peaks.length));
-      let p = 0;
-      for (let j = from; j < to; j++) p = Math.max(p, peaks[j]);
-      const barH = Math.max(3, p * h * 0.92);
-      const x = i * (barW + gap);
-      ctx.fillStyle = x + barW / 2 <= playedX ? COLORS.played : COLORS.idle;
-      ctx.fillRect(x, (h - barH) / 2, barW, barH);
+    for (const r of results) {
+      const card = buildTrack(r, settings, prompt);
+      tracksEl.appendChild(card.el);
+      tracks.push(card);
     }
   }
 
-  function updateTime() {
-    const d = Number.isFinite(audio.duration) ? audio.duration : 0;
-    timeEl.textContent = formatTime(audio.currentTime) + " / " + formatTime(d);
-    wave.setAttribute("aria-valuemax", Math.round(d));
-    wave.setAttribute("aria-valuenow", Math.round(audio.currentTime));
-    wave.setAttribute("aria-valuetext", formatTime(audio.currentTime) + " of " + formatTime(d));
+  function buildTrack(result, settings, prompt) {
+    const el = trackTemplate.content.firstElementChild.cloneNode(true);
+    const audio = el.querySelector("audio");
+    const wave = el.querySelector(".wave");
+    const canvas = wave.querySelector("canvas");
+    const playBtn = el.querySelector(".play");
+    const timeEl = el.querySelector(".time");
+    const t = { el, audio, wave, canvas, peaks: null, blob: result.blob,
+                objectUrl: null, raf: 0, dragging: false };
+
+    el.dataset.variant = result.v.key;
+    el.querySelector(".track-title").textContent = result.v.title;
+
+    const fileId = "filename-" + ++cardSeq;
+    const fileLabel = el.querySelector(".filename-label");
+    fileLabel.setAttribute("for", fileId);
+    const filenameEl = el.querySelector(".filename");
+    filenameEl.id = fileId;
+    filenameEl.value = slugify(prompt) + "-" + result.v.file + "-seed" + result.seed;
+    const savedEl = el.querySelector(".saved");
+    savedEl.textContent = "";
+    el.querySelector(".meta").textContent = settings.duration + " seconds, "
+      + settings.steps + " steps, CFG scale " + settings.cfg_scale + ", seed " + result.seed
+      + ". Generated in " + Math.round(result.seconds) + " seconds, "
+      + (result.blob.size / 1048576).toFixed(1) + " MB.";
+
+    t.draw = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const w = wave.clientWidth, h = wave.clientHeight;
+      if (!w || !h) return;
+      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+      }
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      if (!t.peaks) return;
+
+      const barW = 3, gap = 2;
+      const n = Math.max(1, Math.floor((w + gap) / (barW + gap)));
+      const progress = audio.duration ? audio.currentTime / audio.duration : 0;
+      const playedX = progress * w;
+
+      for (let i = 0; i < n; i++) {
+        const from = Math.floor((i / n) * t.peaks.length);
+        const to = Math.max(from + 1, Math.floor(((i + 1) / n) * t.peaks.length));
+        let p = 0;
+        for (let j = from; j < to; j++) p = Math.max(p, t.peaks[j]);
+        const barH = Math.max(3, p * h * 0.92);
+        const x = i * (barW + gap);
+        ctx.fillStyle = x + barW / 2 <= playedX ? COLORS.played : COLORS.idle;
+        ctx.fillRect(x, (h - barH) / 2, barW, barH);
+      }
+    };
+
+    t.updateTime = () => {
+      const d = Number.isFinite(audio.duration) ? audio.duration : 0;
+      timeEl.textContent = formatTime(audio.currentTime) + " / " + formatTime(d);
+      wave.setAttribute("aria-valuemax", Math.round(d));
+      wave.setAttribute("aria-valuenow", Math.round(audio.currentTime));
+      wave.setAttribute("aria-valuetext", formatTime(audio.currentTime) + " of " + formatTime(d));
+    };
+
+    t.loop = () => {
+      t.draw();
+      t.updateTime();
+      if (!audio.paused) t.raf = requestAnimationFrame(t.loop);
+    };
+
+    t.seekTo = (clientX) => {
+      if (!Number.isFinite(audio.duration)) return;
+      const r = wave.getBoundingClientRect();
+      const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+      audio.currentTime = f * audio.duration;
+      t.draw();
+      t.updateTime();
+    };
+
+    t.destroy = () => {
+      audio.pause();
+      cancelAnimationFrame(t.raf);
+      if (t.objectUrl) URL.revokeObjectURL(t.objectUrl);
+    };
+
+    /* ---------- Playback ---------- */
+
+    playBtn.addEventListener("click", () => {
+      if (audio.paused) audio.play(); else audio.pause();
+    });
+    audio.addEventListener("play", () => {
+      playBtn.textContent = "Pause";
+      for (const other of tracks) if (other !== t) other.audio.pause();
+      cancelAnimationFrame(t.raf);
+      t.loop();
+    });
+    audio.addEventListener("pause", () => { playBtn.textContent = "Play"; t.draw(); t.updateTime(); });
+    audio.addEventListener("ended", () => { playBtn.textContent = "Play"; t.draw(); t.updateTime(); });
+    audio.addEventListener("loadedmetadata", () => { t.draw(); t.updateTime(); });
+
+    wave.addEventListener("pointerdown", (e) => {
+      t.dragging = true;
+      wave.setPointerCapture(e.pointerId);
+      t.seekTo(e.clientX);
+    });
+    wave.addEventListener("pointermove", (e) => { if (t.dragging) t.seekTo(e.clientX); });
+    wave.addEventListener("pointerup", () => { t.dragging = false; });
+    wave.addEventListener("pointercancel", () => { t.dragging = false; });
+
+    wave.addEventListener("keydown", (e) => {
+      const d = audio.duration;
+      if (!Number.isFinite(d)) return;
+      const moves = { ArrowLeft: -5, ArrowRight: 5 };
+      if (e.key in moves) audio.currentTime = Math.min(d, Math.max(0, audio.currentTime + moves[e.key]));
+      else if (e.key === "Home") audio.currentTime = 0;
+      else if (e.key === "End") audio.currentTime = d;
+      else if (e.key === " ") { audio.paused ? audio.play() : audio.pause(); }
+      else return;
+      e.preventDefault();
+      t.draw();
+      t.updateTime();
+    });
+
+    el.querySelector(".save-btn").addEventListener("click", () => saveCard(t, filenameEl, savedEl));
+
+    t.objectUrl = URL.createObjectURL(result.blob);
+    audio.src = t.objectUrl;
+    computePeaks(result.blob)
+      .then((peaks) => { t.peaks = peaks; t.draw(); t.updateTime(); })
+      .catch(() => {});
+
+    return t;
   }
-
-  function loop() {
-    draw();
-    updateTime();
-    if (!audio.paused) raf = requestAnimationFrame(loop);
-  }
-
-  /* ---------- Playback ---------- */
-
-  playBtn.addEventListener("click", () => {
-    if (audio.paused) audio.play(); else audio.pause();
-  });
-  audio.addEventListener("play", () => { playBtn.textContent = "Pause"; cancelAnimationFrame(raf); loop(); });
-  audio.addEventListener("pause", () => { playBtn.textContent = "Play"; draw(); updateTime(); });
-  audio.addEventListener("ended", () => { playBtn.textContent = "Play"; draw(); updateTime(); });
-
-  function seekTo(clientX) {
-    if (!Number.isFinite(audio.duration)) return;
-    const r = wave.getBoundingClientRect();
-    const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
-    audio.currentTime = f * audio.duration;
-    draw();
-    updateTime();
-  }
-
-  wave.addEventListener("pointerdown", (e) => { dragging = true; wave.setPointerCapture(e.pointerId); seekTo(e.clientX); });
-  wave.addEventListener("pointermove", (e) => { if (dragging) seekTo(e.clientX); });
-  wave.addEventListener("pointerup", () => { dragging = false; });
-  wave.addEventListener("pointercancel", () => { dragging = false; });
-
-  wave.addEventListener("keydown", (e) => {
-    const d = audio.duration;
-    if (!Number.isFinite(d)) return;
-    const moves = { ArrowLeft: -5, ArrowRight: 5 };
-    if (e.key in moves) audio.currentTime = Math.min(d, Math.max(0, audio.currentTime + moves[e.key]));
-    else if (e.key === "Home") audio.currentTime = 0;
-    else if (e.key === "End") audio.currentTime = d;
-    else if (e.key === " ") { audio.paused ? audio.play() : audio.pause(); }
-    else return;
-    e.preventDefault();
-    draw();
-    updateTime();
-  });
-
-  window.addEventListener("resize", draw);
 
   /* ---------- Save ---------- */
 
-  function fileName() {
+  async function saveCard(t, filenameEl, savedEl) {
     const base = filenameEl.value.replace(/\.wav$/i, "").replace(/[\\/:*?"<>|]+/g, "-").trim();
-    return (base || "track") + ".wav";
-  }
-
-  async function save() {
-    if (!currentBlob) return;
-    const name = fileName();
+    const name = (base || "track") + ".wav";
 
     if ("showSaveFilePicker" in window) {
       try {
@@ -627,7 +803,7 @@
           types: [{ description: "WAV audio", accept: { "audio/wav": [".wav"] } }],
         });
         const writable = await handle.createWritable();
-        await writable.write(currentBlob);
+        await writable.write(t.blob);
         await writable.close();
         savedEl.textContent = "Saved as " + handle.name + ".";
       } catch (err) {
@@ -637,7 +813,7 @@
     }
 
     const a = document.createElement("a");
-    a.href = objectUrl;
+    a.href = t.objectUrl;
     a.download = name;
     document.body.appendChild(a);
     a.click();
@@ -645,11 +821,11 @@
     savedEl.textContent = "Downloaded as " + name + " to your browser's download folder.";
   }
 
-  saveBtn.addEventListener("click", save);
   generateBtn.addEventListener("click", generate);
   promptEl.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !generateBtn.disabled) { e.preventDefault(); generate(); }
   });
+  window.addEventListener("resize", () => { for (const t of tracks) t.draw(); });
 
   loadConfig();
 })();
