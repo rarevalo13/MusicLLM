@@ -22,4 +22,9 @@ selected_metadata.csv
 *.safetensors
 *_latents/
 lightning_logs/
+containers/
+genre_splits/
+heldout_clips/
+runs/
+*_clips_*/
 .vscode/
