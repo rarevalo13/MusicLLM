@@ -265,7 +265,7 @@ uv run python scripts/train_lora.py --model small-music-base --data_dir ../rock_
 
 ### `compare_lora.py`
 
-Generates three built-in prompts for one genre (`--genre rock|hiphop`, default `rock`) twice,
+Generates three built-in prompts for one genre (`--genre rock|hiphop|classical|house`, default `rock`) twice,
 with the LoRA off (strength 0) and on (strength 1), using the same seed so the LoRA is the only
 difference. The LoRA is trained on `small-music-base` and applied to the post-trained
 `small-music`.

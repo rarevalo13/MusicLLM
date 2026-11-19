@@ -10,7 +10,8 @@ foundation model locally.
 - **Application:** genre-specialized *instrumental* music generator (no vocals, no lyrics).
   Users describe music in text and get original tracks.
 - **Core experiment:** LoRA fine-tune **Stable Audio 3 Small** on specific genres
-  (rock, hip hop) and show the adapted model beats the base model on those genres.
+  (rock, hip hop; classical and house added Nov 19) and show the adapted model beats the base model
+  on those genres.
 - **Deadline:** final submission + 15-min presentation due **Nov 30, 2026**
   (Thanksgiving Nov 26; aim to finish before it).
 - **Required deliverables:** organized `code/` folder with source, setup instructions,
@@ -45,7 +46,7 @@ foundation model locally.
 | `train_lora.slurm` | GPU job per genre: `train_lora.py` on `<genre>_latents/` (small-music-base, rank 16, dora-rows, batch 4, 6,000 steps, checkpoint every 1,000) → `runs/<genre>/`; extra args override | Cluster GPU |
 | `hawk_container.sh` | Runs a command in the Ubuntu 22.04 Singularity sandbox (`containers/ubuntu-22.04`) with `stable-audio-3/.venv/bin` first on PATH; binds the NVIDIA driver libraries on GPU nodes | Cluster |
 | `HAWK_TRAINING_PLAN.md` | The user's step-by-step for the full Hawk run, including the Hugging Face setup | — |
-| `compare_lora.py` | Same prompts with LoRA strength 0 vs 1, same `seed=`, for A/B listening; `--genre rock\|hiphop` picks the built-in prompts. On Hawk run from the repo root as `./hawk_container.sh python compare_lora.py`; with uv, from `stable-audio-3/` as `../compare_lora.py` | Cluster GPU |
+| `compare_lora.py` | Same prompts with LoRA strength 0 vs 1, same `seed=`, for A/B listening; `--genre rock\|hiphop\|classical\|house` picks the built-in prompts. On Hawk run from the repo root as `./hawk_container.sh python compare_lora.py`; with uv, from `stable-audio-3/` as `../compare_lora.py` | Cluster GPU |
 | `stable_audio_test.py` | One-off text-to-audio test with `small-music` | Mac |
 | `website/website.py` + `static/index.html` | Tyler's Flask web demo on `small-music`: prompt → WAV; `--lora NAME=PATH` (repeatable) adds a base/LoRA selector and same-seed side-by-side compare; seed box; serves `127.0.0.1:8000` (`--host`, `--port`) | Mac or cluster GPU |
 
@@ -71,6 +72,18 @@ T5-Gemma text encoder from the gated `small-music` repo, so Hawk needs `hf auth 
 **User decision: train both genres on Hawk, not Colab.** Added `split_holdout.py`,
 `make_latents.slurm`, `train_lora.slurm`, `hawk_container.sh`; the user's walkthrough is
 `HAWK_TRAINING_PLAN.md`.
+**Nov 18: full Hawk run done** (the user followed the plan; jobs 64171–64192). Smoke test 200 steps:
+2 min 53 s. Download (`day-long`, 8 CPUs): 733 shards, 344.4 GB in 52 min 50 s (~109 MB/s), more
+than the simulation predicted → 3,300 rock (1,125 artists) + 3,300 hip hop (872 artists), 16 GB of
+MP3s. Split: rock 2,995 train / 305 held out, hip hop 2,994 / 306. `make_latents.slurm` (~1 h per
+genre, both on one node): cutting ~0.4–0.5 s per track, encoding ~0.22 s per clip; rock 11,236
+training + 1,126 held-out clips, hip hop 10,836 + 1,139. The GPU node's `/tmp` had <100 GB free, so
+the temporary clips (~117 GB together) went to the NFS home and were deleted afterwards.
+`train_lora.slurm` (6,000 steps, batch 4, ~2.1–2.2 passes): ~1.75 it/s (7 clips/s), ~58 min per
+genre; 10.7M trainable of 578M params; final `runs/<genre>/epoch=2-step=6000.ckpt` (43 MB).
+`compare_lora.py` per genre: under a minute → `lora_comparison/<genre>/`. Total ≈4.2 A100-hours
+(training 1.9). Hawk's SLURM 20.02 records no CPU/RAM/GPU usage (`jobacct_gather/none`), so peak
+RAM and VRAM weren't measured.
 
 ## Environments
 
@@ -216,6 +229,19 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
   30 s clip, so ~3.7 GB of latents per genre. `--max-chunks 2` halves both.
   The trainer's latent loader scans subfolders, so several latent folders can be trained together
   under one `--encoded_dir`.
+- **Extra genres: classical + house (user decision, Nov 19; house instead of the broad `electronic`
+  tag).** Eligible with all four tags exclusive (60–600 s) → after the 20-per-artist cap: classical
+  18,789 → 10,802 (2,161 artists), house 9,600 → 7,109 (1,910). Other tags after the cap: electronic
+  ~39k, ambient 20,189, techno 6,962, jazz 5,619; metal 2,513 and lo-fi 1,240 are too few for 3,300.
+  Download into `genre_tracks` with `--genres rock hiphop classical house`: full quotas are skipped,
+  the manifest blocks duplicates and the 4-way exclusivity keeps rock/hip hop-tagged tracks out.
+  House is the bottleneck: simulated 901 shards after the first run's 732 done shards, × 1.13 (first
+  run: real 733 vs simulated 647) ≈ 1,020 shards / ~480 GB / ~75 min; ~1,070 house and ~835
+  classical artists, ~12,600 / ~11,800 clips before the hold-out. 67% of house captions read
+  "with electronic … influences". `READABLE` got 48 more joined tags on Nov 19 (every run-together
+  English tag on ≥0.1% of eligible classical or house tracks: `acidhouse`, `progressivehouse`,
+  `contemporarypiano`, …), changing 15% of house and 7% of classical captions; misspellings,
+  non-English tags and artist/software names stay as they are.
 
 ## Rules and constraints
 
@@ -248,23 +274,20 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
 
 ## Next steps
 
-Steps 2–5 are the user's to run, following `HAWK_TRAINING_PLAN.md`.
+`HAWK_TRAINING_PLAN.md` steps 0–6 ran on Nov 18 (see Status). Next:
 
-1. Push the Hawk scripts; on Hawk `git stash && git pull` (the stash is the user's old conda edit
-   to `download_genres.slurm`, now built in).
-2. User: Hugging Face token + `./hawk_container.sh hf auth login`; plan step 0.4 packages.
-3. Training smoke test on Hawk (200 steps on `~/MusicLLM_tests/latents200_gpu`): confirms the
-   gated download works and gives the it/s for sizing the 6,000-step runs.
-4. Download 3,300 per genre → `split_holdout.py` → `make_latents.slurm` per genre →
-   `train_lora.slurm` per genre.
-5. `compare_lora.py --genre` per genre; web demo with both LoRAs (and the Nov 15 rock checkpoint).
-6. Evaluation pipeline (FAD vs `heldout_clips/<genre>/`, CLAP, blind A/B test), ablations;
-   finish slides before Thanksgiving.
+1. Listen to `lora_comparison/<genre>/`; try both LoRAs in the web demo (its first test with real
+   checkpoints).
+2. Classical + house on Hawk, same steps as the plan: `sbatch download_genres.slurm --genres rock
+   hiphop classical house` → `split_holdout.py` (rock/hip hop keep their split) →
+   `make_latents.slurm` and `train_lora.slurm` per genre → `compare_lora.py --genre classical|house`.
+3. Evaluation pipeline (FAD vs `heldout_clips/<genre>/`, CLAP, blind A/B test); measure latency and
+   peak VRAM (SLURM doesn't record it); ablations; finish slides before Thanksgiving.
 
 ## Open questions to verify
 
-- Hawk's download speed from Hugging Face, and training speed on its A100 40GB with latents at
-  batch size 4 (the plan's smoke test measures the latter).
+- Peak VRAM for training (batch 4) and generation: not recorded by Hawk's SLURM; measure with
+  `torch.cuda.max_memory_allocated()` or by sampling `nvidia-smi` during a short run.
 - Whether all Jamendo MP3s are 44.1 kHz: all 29 in `sample_tracks/` are 44.1 kHz stereo;
   check `prepare_lora_data.py` skip messages at scale (the trainer resamples on load anyway).
 - JamendoMaxCaps captions: the HF repo has `final_caption30sec.jsonl` (787 MB). Its format hasn't

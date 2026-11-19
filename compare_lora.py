@@ -22,6 +22,16 @@ PROMPTS = {
         "Instrumental hip hop with lo-fi influences, featuring piano, drums, bass, peaceful mood, slow tempo",
         "Instrumental hip hop with trap influences, featuring synthesizer, drum machine, bass, energetic mood, fast tempo",
     ],
+    "classical": [
+        "Instrumental classical, featuring piano, sad, romantic mood, slow tempo",
+        "Instrumental classical with film score influences, featuring orchestra, strings, epic, cinematic mood, medium tempo",
+        "Instrumental classical with baroque influences, featuring strings, violin, cello, happy mood, fast tempo",
+    ],
+    "house": [
+        "Instrumental house with electronic and dance influences, featuring synthesizer, bass, drums, energetic, party mood, fast tempo",
+        "Instrumental house with deep house influences, featuring synthesizer, electric piano, bass, groovy, lounge mood, medium tempo",
+        "Instrumental house with electronic and techno influences, featuring synthesizer, drum machine, bass, dark, minimal mood, medium tempo",
+    ],
 }
 
 ap = argparse.ArgumentParser()
