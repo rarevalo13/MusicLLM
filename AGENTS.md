@@ -47,6 +47,7 @@ foundation model locally.
 | `hawk_container.sh` | Runs a command in the Ubuntu 22.04 Singularity sandbox (`containers/ubuntu-22.04`) with `stable-audio-3/.venv/bin` first on PATH; binds the NVIDIA driver libraries on GPU nodes | Cluster |
 | `HAWK_TRAINING_PLAN.md` | The user's step-by-step for the full Hawk run, including the Hugging Face setup | — |
 | `compare_lora.py` | Same prompts with LoRA strength 0 vs 1, same `seed=`, for A/B listening; `--genre rock\|hiphop\|classical\|house` picks the built-in prompts. On Hawk run from the repo root as `./hawk_container.sh python compare_lora.py`; with uv, from `stable-audio-3/` as `../compare_lora.py` | Cluster GPU |
+| `generate_eval.py` + `.slurm` | Main eval set: for every `heldout_clips/<genre>/` clip, one base + one LoRA clip from its caption, same seed → `eval_gen/<genre>/{base,lora}/` + `manifest.csv`; chunk-round order, resumable. On Hawk `sbatch generate_eval.slurm <genre>` | Cluster GPU |
 | `stable_audio_test.py` | One-off text-to-audio test with `small-music` | Mac |
 | `website/website.py` + `static/index.html` | Tyler's Flask web demo on `small-music`: prompt → WAV; `--lora NAME=PATH` (repeatable) adds a base/LoRA selector and same-seed side-by-side compare; seed box; serves `127.0.0.1:8000` (`--host`, `--port`) | Mac or cluster GPU |
 
@@ -84,6 +85,19 @@ genre; 10.7M trainable of 578M params; final `runs/<genre>/epoch=2-step=6000.ckp
 `compare_lora.py` per genre: under a minute → `lora_comparison/<genre>/`. Total ≈4.2 A100-hours
 (training 1.9). Hawk's SLURM 20.02 records no CPU/RAM/GPU usage (`jobacct_gather/none`), so peak
 RAM and VRAM weren't measured.
+**Nov 19:** classical + house run through the same pipeline. All 24 comparison clips (4 genres) are
+on the Mac in `lora_comparison_hawk/<genre>/` (WAVs git-ignored); their prompts and seeds are in
+`lora_comparison_hawk/prompts.txt` (tracked; `compare_lora.py` doesn't record them). The four
+`checkpoints/<genre>.ckpt` plus the clips and `prompts.txt` are on the user's Google Drive in
+`MusicLLM_LoRAs/` (rclone remote `gdrive:`, `scope=drive.file`; rclone warns its shared Drive
+client ID is being retired during 2026, so uploads may need the user's own client ID).
+**Nov 19 (later):** `generate_eval.py` + `generate_eval.slurm` written for the main evaluation
+set (one base + one LoRA clip per held-out clip, same seed, `eval_gen/<genre>/`). Verified on the
+Mac only: MPS, `--duration 5` clips, a stand-in held-out folder of 2 tracks × 2 chunks symlinked
+from `rock_lora_smoke/` — generation, manifest repair/resume and the `.slurm` arg handling all
+work; **not yet run on Hawk**. On MPS the LoRA clips took about twice as long as the base ones
+(5 s clips: base 4–8 s, LoRA 10–16 s); the manifest's `gen_seconds` will show whether the A100
+does the same (the LoRA is a weight parametrization, recomputed in the forward pass).
 
 ## Environments
 
@@ -152,6 +166,9 @@ sbatch make_latents.slurm rock; sbatch make_latents.slurm hiphop        # → <g
 sbatch train_lora.slurm rock; sbatch train_lora.slurm hiphop            # → runs/<genre>/*.ckpt
 srun -p gpu-short --gres=gpu:1 -c 4 --mem=16G -t 30 ./hawk_container.sh python compare_lora.py \
     --genre rock --lora runs/rock/<checkpoint>.ckpt --out lora_comparison/rock
+# Evaluation set (one job per genre, resumable; smoke test first)
+sbatch -p gpu-short -t 20 generate_eval.slurm rock --limit 4 --out eval_gen_smoke
+sbatch generate_eval.slurm rock    # then hiphop classical house
 
 # Training elsewhere (any CUDA machine with uv, inside stable-audio-3/)
 uv run python scripts/train_lora.py \
@@ -198,6 +215,12 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
   `--demo_every 500`, `--logger csv`. Checkpoints are Lightning `.ckpt` files holding only the
   LoRA weights + `lora_config`; `load_lora()` accepts `.ckpt` or `.safetensors`.
 - `--exclude seconds_total` prevents conditioner hijacking on small datasets.
+- `set_lora_strength(0.0)` gives exactly the base model: DoRA layers return the original weights
+  at strength 0 (`dora_forward` in `stable_audio_3/models/lora/model.py`). So `compare_lora.py`'s
+  `_base` clips and the web demo's base option are true base-model outputs. In-between strengths
+  change smoothly from base (0) to the full LoRA (1): in the pinned submodule (`77e0398`)
+  `dora_forward` also blends the learned magnitude toward the base norm (`_blend_magnitude`, added
+  in `2a9c47e`), so tiny strengths are close to base and a strength sweep is meaningful.
 - Pre-encoding to latents is recommended for large datasets: for Small use
   `scripts/pre_encode_dataset.py --model same-s`, then train with `--encoded_dir`.
 - `train_lora.py` requires an NVIDIA (CUDA) GPU; Small needs only ~2.5 GB VRAM.
@@ -252,6 +275,11 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
 - **Licensing:** JamendoMaxCaps tracks carry per-track Creative Commons licenses, many
   non-commercial → research/academic use only. Never scrape YouTube, Spotify or commercial
   catalogs. Cite the dataset in the presentation.
+  Sharing LoRA checkpoints: Stable Audio's Community License counts LoRAs as Derivative Works, so
+  include the license, a NOTICE file with Stability's attribution line, and show "Powered by
+  Stability AI" in the README or demo (Section IV.a). The `.ckpt` files hold only `state_dict`
+  (576 fp32 tensors, all in the DiT; none in the T5-Gemma text encoder) + `lora_config`, and load
+  with plain `torch.load` (no Lightning needed).
 - **Captions must match prompt style:** training captions and inference prompts should use
   the same vocabulary (genre, influences, instruments, mood, tempo). Jamendo joins
   multi-word tags (`electricguitar`, `hiphop`); `prepare_lora_data.py` maps common ones
@@ -261,7 +289,9 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
 
 ## Evaluation plan
 
-- Fixed set of ~20 prompts generated with base vs LoRA (same seed, steps, cfg).
+- Main set: one base + one LoRA clip per held-out clip, generated from the clip's own caption
+  with the same seed (`generate_eval.py`), ~1,100 pairs per genre. The 12
+  `lora_comparison_hawk/` pairs are for listening.
 - FAD against held-out real tracks of the genre; CLAP score for prompt adherence.
 - Blind A/B listening test with 10–15 classmates.
 - Latency and peak VRAM for 30/60/120 s clips; steps sweep (4/8/16/32/50) for a
@@ -281,7 +311,8 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
 2. Classical + house on Hawk, same steps as the plan: `sbatch download_genres.slurm --genres rock
    hiphop classical house` → `split_holdout.py` (rock/hip hop keep their split) →
    `make_latents.slurm` and `train_lora.slurm` per genre → `compare_lora.py --genre classical|house`.
-3. Evaluation pipeline (FAD vs `heldout_clips/<genre>/`, CLAP, blind A/B test); measure latency and
+3. Generate the evaluation set on Hawk first (`generate_eval.slurm`, one job per genre), then the
+   evaluation pipeline (FAD vs `heldout_clips/<genre>/`, CLAP, blind A/B test); measure latency and
    peak VRAM (SLURM doesn't record it); ablations; finish slides before Thanksgiving.
 
 ## Open questions to verify

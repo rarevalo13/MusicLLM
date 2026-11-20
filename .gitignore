@@ -26,5 +26,6 @@ containers/
 genre_splits/
 heldout_clips/
 runs/
+eval_gen*/
 *_clips_*/
 .vscode/

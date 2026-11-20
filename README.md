@@ -19,6 +19,7 @@ make_latents.slurm ──> <genre>_latents/ + heldout_clips/<genre>/   (Hawk GPU
 train_lora.slurm ──> runs/<genre>/*.ckpt      (Hawk GPU: LoRA on small-music-base)
 stable-audio-3/scripts/train_lora.py ──> LoRA checkpoint (.ckpt)          (cluster GPU)
 compare_lora.py ──> lora_comparison/         (same prompts, LoRA off vs on)
+generate_eval.py + .slurm ──> eval_gen/<genre>/   (Hawk GPU: LoRA off vs on, every held-out clip)
 website/website.py ──> http://127.0.0.1:8000  (web demo: base vs LoRA, same seed)
 hawk_container.sh ──> runs Stable Audio steps in the Hawk container
 ```
@@ -36,6 +37,7 @@ hawk_container.sh ──> runs Stable Audio steps in the Hawk container
 | `train_lora.slurm` | LoRA training on `<genre>_latents/` → `runs/<genre>/` | Hawk GPU |
 | `hawk_container.sh` | Run a command inside the Ubuntu container on Hawk | Hawk |
 | `compare_lora.py` | Generate the same prompts with the LoRA off and on | Cluster GPU |
+| `generate_eval.py` + `.slurm` | Generate LoRA off/on clips for every held-out clip | Hawk GPU |
 | `stable_audio_test.py` | One-off text-to-music test | Mac |
 | `website/website.py` | Web demo: prompt in, WAV out; base model and LoRA side by side | Mac or cluster GPU |
 
@@ -287,6 +289,36 @@ from.
 Options: `--lora` (required, `.ckpt` or `.safetensors`), `--genre` (`rock`), `--model`
 (`small-music`), `--duration` (30), `--out` (`lora_comparison`).
 
+### `generate_eval.py` + `generate_eval.slurm`
+
+Builds the main evaluation set for one genre: for every held-out clip in
+`heldout_clips/<genre>/` (30 s WAV + `.txt` caption, written by `make_latents.slurm`), it
+generates one clip with the LoRA off and one with it on, prompted by the clip's own caption
+with the same seed. The LoRA is applied to `small-music`, same as `compare_lora.py`.
+
+- Processing order is every track's `_00` clip first, then `_01`, and so on
+  (`--rounds N` keeps only chunk indexes below N, `--limit N` the first N clips), so stopping
+  at any point leaves base and LoRA covering the same clips.
+- Writes `<out>/<genre>/base/<clip>.wav`, `<out>/<genre>/lora/<clip>.wav` and
+  `manifest.csv` (one row per file: clip, caption, seed, settings, generation seconds).
+- Resumable: existing WAVs are skipped and the manifest is repaired on startup, so submitting
+  the same command again finishes the set. A manifest made with different
+  `--model/--lora/--steps/--cfg-scale/--duration` is refused — use another `--out`.
+- If a LoRA output ever comes back bit-identical to its base output, the run stops with an
+  error (`check --lora`).
+
+On Hawk, from the repo root (one job per genre; the `.slurm` picks
+`runs/<genre>/*-step=6000.ckpt` unless `LORA=` is set):
+
+```bash
+sbatch -p gpu-short -t 20 generate_eval.slurm rock --limit 4 --out eval_gen_smoke   # smoke test
+sbatch generate_eval.slurm rock     # then one per genre: hiphop classical house
+```
+
+Options: `--genre` (required), `--lora` (required), `--heldout` (`heldout_clips`),
+`--out` (`eval_gen`), `--model` (`small-music`), `--duration` (30), `--steps` (8),
+`--cfg-scale` (1.0), `--rounds`, `--limit`.
+
 ### `stable_audio_test.py`
 
 Generates 30 s with `small-music` from the prompt written in the script and saves `neo_soul.wav`.
@@ -347,7 +379,7 @@ the Seed box to generate the same track again.
 | `heldout_clips/`, `*_latents/` | Held-out WAV clips; pre-encoded latents | yes |
 | `runs/` | LoRA checkpoints from `train_lora.slurm` | yes |
 | `containers/` | Singularity image for Hawk (`ubuntu-22.04`) | yes |
-| `lora_comparison/`, `*.wav` | Generated audio | yes |
+| `lora_comparison/`, `eval_gen*/`, `*.wav` | Generated audio | yes |
 | `slurm-*.out` | SLURM job logs | yes |
 | `stable-audio-3/` | Stable Audio 3 code | git submodule |
 

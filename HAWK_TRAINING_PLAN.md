@@ -15,6 +15,7 @@ or external SSD needed. Run every command on Hawk from `~/MusicLLM` unless a ste
 | 4 | Cut 30 s clips and encode them, one job per genre | 2 GPU jobs (`gpu-day-long`) | ~1–2 h each |
 | 5 | Train the two LoRAs, one job per genre | 2 GPU jobs (`gpu-day-long`) | from step 1's speed |
 | 6 | Listen to base vs LoRA, copy the results to your Mac | `gpu-short` + Mac | ~15 min |
+| 8 | Generate the evaluation set (base vs LoRA on every held-out clip) | 4 GPU jobs (`gpu-day-long`) | smoke-test seconds per clip × ~2,200 per genre |
 
 Steps 1 and 2 can run at the same time; in steps 4 and 5 the rock and hip hop jobs run side by side.
 
@@ -255,11 +256,47 @@ Then open http://127.0.0.1:8000. Checkpoints and WAV files are ignored by git.
 - `make_latents.slurm` deletes its own temporary clips. If a job was killed, remove any leftover
   `<genre>_clips_<jobid>/` folder from the repo.
 
+## Step 8: generate the evaluation set
+
+This makes the main evaluation set: for every held-out clip in `heldout_clips/<genre>/`, one
+clip with the LoRA off and one with it on, from the clip's own caption with the same seed.
+
+```bash
+git pull     # picks up generate_eval.py + generate_eval.slurm
+```
+
+**Smoke test first** (a few minutes on `gpu-short`):
+
+```bash
+sbatch -p gpu-short -t 20 generate_eval.slurm rock --limit 4 --out eval_gen_smoke
+```
+
+When it finishes, check the log (`slurm-generate-eval-<jobid>.out`): the per-clip lines show the
+seconds each generation took, and `eval_gen_smoke/rock/` should hold `manifest.csv` (8 rows) and 4
+WAVs in each of `base/` and `lora/`. Then delete it: `rm -rf eval_gen_smoke`.
+
+**Full run** — one job per genre, all four side by side:
+
+```bash
+for g in rock hiphop classical house; do sbatch generate_eval.slurm $g; done
+```
+
+Each job uses that genre's `runs/<genre>/*-step=6000.ckpt` automatically. **Watching it:**
+`tail -f slurm-generate-eval-<jobid>.out` shows one line per clip, and
+`ls eval_gen/rock/lora | wc -l` vs `ls heldout_clips/rock/*.wav | wc -l` shows the progress
+(numbers should match when done). **If a job stops,** submit the same command again: existing
+WAVs are skipped and it picks up where it left off. **Done** when the log ends with
+`complete: every held-out clip has both files`.
+
+**Expected:** about 1,100 clips per genre per condition at ~5.3 MB each — ~12 GB per genre,
+~48 GB total. Time per genre ≈ (smoke-test seconds per clip) × ~2,200 generations. Leave the
+WAVs on Hawk; the evaluation runs there too.
+
 ## After training
 
-Not part of this plan: FAD between generated clips and `heldout_clips/<genre>/`, CLAP prompt
-adherence, the blind A/B listening test, latency and VRAM measurements, and the ablations (rank 8/32,
-smaller training sets).
+Not part of this plan: the metrics computed on the step 8 clips — FAD between generated clips
+and `heldout_clips/<genre>/`, CLAP prompt adherence, the blind A/B listening test — plus latency
+and VRAM measurements, and the ablations (rank 8/32, smaller training sets).
 
 ## Reference
 
@@ -307,6 +344,7 @@ tail -f slurm-<name>-<jobid>.out                       # follow a job's log
 | `<genre>_latents/` | Encoded training clips |
 | `runs/<genre>/` | Checkpoints and training logs |
 | `lora_comparison/` | Base vs LoRA comparison WAVs |
+| `eval_gen/<genre>/` | Evaluation set: `base/` + `lora/` WAVs and `manifest.csv` |
 | `~/.cache/huggingface/` | Downloaded models and your Hugging Face token |
 
 ### How the container was built
