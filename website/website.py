@@ -228,10 +228,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    try:
-        loras = parse_lora_args(args.lora)
-    except ValueError as error:
-        parser.error(str(error))
+    if args.lora:
+        try:
+            loras = parse_lora_args(args.lora)
+        except ValueError as error:
+            parser.error(str(error))
+    else:
+        loras = {}
+        models_dir = Path(__file__).parent / "models"
+        if models_dir.exists():
+            for filename in models_dir.iterdir():
+                if filename.suffix == ".ckpt":
+                    loras[filename.stem] = str(filename)
 
     if loras:
         print(f"Loading {MODEL_NAME} with LoRAs: {', '.join(loras)}...")
