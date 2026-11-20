@@ -16,6 +16,7 @@ or external SSD needed. Run every command on Hawk from `~/MusicLLM` unless a ste
 | 5 | Train the two LoRAs, one job per genre | 2 GPU jobs (`gpu-day-long`) | from step 1's speed |
 | 6 | Listen to base vs LoRA, copy the results to your Mac | `gpu-short` + Mac | ~15 min |
 | 8 | Generate the evaluation set (base vs LoRA on every held-out clip) | 4 GPU jobs (`gpu-day-long`) | smoke-test seconds per clip × ~2,200 per genre |
+| 9 | Compute the evaluation metrics (features per genre, then metrics) | 4 GPU jobs (`gpu-day-long`) + 1 CPU job (`short`) | features: not timed yet (see the logs); metrics: minutes |
 
 Steps 1 and 2 can run at the same time; in steps 4 and 5 the rock and hip hop jobs run side by side.
 
@@ -289,14 +290,46 @@ WAVs are skipped and it picks up where it left off. **Done** when the log ends w
 `complete: every held-out clip has both files`.
 
 **Expected:** about 1,100 clips per genre per condition at ~5.3 MB each — ~12 GB per genre,
-~48 GB total. Time per genre ≈ (smoke-test seconds per clip) × ~2,200 generations. Leave the
-WAVs on Hawk; the evaluation runs there too.
+~48 GB total. Time per genre ≈ (smoke-test seconds per clip) × ~2,200 generations; the first
+smoke test (Nov 19, A100) measured 0.56 s per base clip and 0.92 s per LoRA clip, so about 30
+minutes of generation per genre. Leave the WAVs on Hawk; the evaluation runs there too.
+
+## Step 9: compute the evaluation metrics
+
+Two stages: extract per-clip features on a GPU (one job per genre), then compute the metrics on a
+CPU node.
+
+```bash
+git pull     # picks up eval_features.py/.slurm and eval_metrics.py
+for g in rock hiphop classical house; do sbatch eval_features.slurm $g; done
+```
+
+Each features job reads the held-out clips and every finished generated set (`eval_gen`,
+`eval_gen_steps4/16/32/50`, `eval_gen_base50`) and writes `eval_feats/<set>/<genre>/` — CLAP and
+AST embeddings and scores, AudioSet tag probabilities, spectra and level stats per clip. A set
+that's still generating is skipped with a warning; resubmit the same command once the
+generate-eval jobs are done (existing feature files are kept, so it only does what's missing).
+Log: `slurm-eval-features-<jobid>.out`. The first run downloads the CLAP and AST weights once.
+
+Then the metrics, a few minutes on a CPU node:
+
+```bash
+srun -p short -c 4 --mem=16G -t 60 ./hawk_container.sh python eval_metrics.py
+```
+
+It writes `eval_results/` (`per_clip.csv`, `paired.csv`, `distribution.csv`, `cross_genre.csv`,
+`confusion.csv`, `ltas.npz`, `ltas_summary.csv`, `folds.csv`) and prints a summary: KAD of the
+real floor, base and LoRA against the held-out clips with the share of the base-to-real gap the
+LoRA closes, plus paired per-clip metrics with confidence intervals. Copy it to the Mac (small):
+
+```bash
+scp -r hawk:MusicLLM/eval_results ./eval_results_hawk   # run on the Mac
+```
 
 ## After training
 
-Not part of this plan: the metrics computed on the step 8 clips — FAD between generated clips
-and `heldout_clips/<genre>/`, CLAP prompt adherence, the blind A/B listening test — plus latency
-and VRAM measurements, and the ablations (rank 8/32, smaller training sets).
+Not part of this plan: plots of the step 9 `eval_results/`, the blind A/B listening test, and the
+ablations (rank 8/32, smaller training sets).
 
 ## Reference
 
@@ -345,6 +378,8 @@ tail -f slurm-<name>-<jobid>.out                       # follow a job's log
 | `runs/<genre>/` | Checkpoints and training logs |
 | `lora_comparison/` | Base vs LoRA comparison WAVs |
 | `eval_gen/<genre>/` | Evaluation set: `base/` + `lora/` WAVs and `manifest.csv` |
+| `eval_feats/<set>/<genre>/` | Per-clip feature `.npz`s (CLAP, AST, spectra, levels) |
+| `eval_results/` | Metric tables from `eval_metrics.py` |
 | `~/.cache/huggingface/` | Downloaded models and your Hugging Face token |
 
 ### How the container was built

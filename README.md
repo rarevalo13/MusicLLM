@@ -20,6 +20,8 @@ train_lora.slurm ──> runs/<genre>/*.ckpt      (Hawk GPU: LoRA on small-music
 stable-audio-3/scripts/train_lora.py ──> LoRA checkpoint (.ckpt)          (cluster GPU)
 compare_lora.py ──> lora_comparison/         (same prompts, LoRA off vs on)
 generate_eval.py + .slurm ──> eval_gen/<genre>/   (Hawk GPU: LoRA off vs on, every held-out clip)
+eval_features.py + .slurm ──> eval_feats/<set>/<genre>/ (Hawk GPU: CLAP, AST, spectra per clip)
+eval_metrics.py ──> eval_results/ (CPU: KAD/FAD, CLAP score, genre tags, paired CIs)
 website/website.py ──> http://127.0.0.1:8000  (web demo: base vs LoRA, same seed)
 hawk_container.sh ──> runs Stable Audio steps in the Hawk container
 ```
@@ -38,6 +40,8 @@ hawk_container.sh ──> runs Stable Audio steps in the Hawk container
 | `hawk_container.sh` | Run a command inside the Ubuntu container on Hawk | Hawk |
 | `compare_lora.py` | Generate the same prompts with the LoRA off and on | Cluster GPU |
 | `generate_eval.py` + `.slurm` | Generate LoRA off/on clips for every held-out clip | Hawk GPU |
+| `eval_features.py` + `.slurm` | Extract CLAP/AST/spectrum features per held-out and generated clip | Hawk GPU |
+| `eval_metrics.py` | Compute KAD/FAD, CLAP score and genre-tag metrics from the features | Hawk CPU |
 | `stable_audio_test.py` | One-off text-to-music test | Mac |
 | `website/website.py` | Web demo: prompt in, WAV out; base model and LoRA side by side | Mac or cluster GPU |
 
@@ -319,6 +323,72 @@ Options: `--genre` (required), `--lora` (required), `--heldout` (`heldout_clips`
 `--out` (`eval_gen`), `--model` (`small-music`), `--duration` (30), `--steps` (8),
 `--cfg-scale` (1.0), `--rounds`, `--limit`.
 
+### `eval_features.py` + `eval_features.slurm`
+
+Extracts the per-clip features the metrics use, for one genre and every generated set. Runs on a
+Hawk GPU node: `sbatch eval_features.slurm rock` (one job per genre; the `.slurm` passes
+`--workers 6`).
+
+- Inputs: the held-out clips `heldout_clips/<genre>/*.wav` + `.txt` (condition `real`) and each
+  generated set — `eval_gen`, `eval_gen_steps4/16/32/50`, `eval_gen_base50` — as
+  `<set>/<genre>/{base,lora}/*.wav` with captions from the set's `manifest.csv`. `--sets` picks a
+  subset; the folder equal to `--heldout` is `real`.
+- Per clip: LAION CLAP audio embedding (mean of three 10 s windows, L2-normalised) and CLAP score
+  (cosine with the caption's text embedding); AST AudioSet logits, tag probabilities and pooled
+  embedding; long-term average spectrum; RMS level, peak, clipped-sample fraction and side/mid
+  ratio.
+- Writes `eval_feats/<set name>/<genre>/<condition>.npz` and, once, `eval_feats/clap_text_genres.npz`.
+  Existing files are kept (`--force` redoes them). A set that's still generating (fewer WAVs than
+  held-out clips) or hasn't started is skipped with a warning, so resubmitting later fills in the
+  rest (`--allow-partial` processes an unfinished set anyway).
+- First run downloads the CLAP and AST weights from Hugging Face once. It uses
+  `laion/larger_clap_music_and_speech`, not `laion/larger_clap_music`: the latter's text tower maps
+  every caption to nearly the same embedding (verified broken), and the script stops if the four
+  genre-name text embeddings come out near-identical.
+
+Options: `--genre` (required), `--sets`, `--heldout` (`heldout_clips`), `--out` (`eval_feats`),
+`--batch` (16), `--workers` (4), `--device` (`cuda` if available, else `cpu`), `--limit`, `--force`, `--allow-partial`.
+
+### `eval_metrics.py`
+
+Computes the evaluation metrics from `eval_feats/` — numpy only, so it runs on a CPU node in
+seconds-to-minutes. Reads each genre's held-out clips as the reference and
+`genre_splits/<genre>/heldout.csv` for the artist of each held-out track, and writes
+`eval_results/`:
+
+- `per_clip.csv` — per clip: CLAP score, AST probabilities of the four genres and the 4-way AST
+  prediction, CLAP zero-shot genre probabilities and prediction, KL between the AST tag
+  distributions of a generated clip and the held-out clip it was prompted from, level stats.
+- `paired.csv` — per metric (CLAP score, AST P(target genre), AST and CLAP zero-shot 4-genre
+  accuracy and P(target), KL): real/base/LoRA means and LoRA − base with 95% bootstrap CIs
+  resampling tracks, a sign-flip permutation p-value over tracks, and the LoRA win rate.
+- `distribution.csv` — KAD (CLAP and AST embeddings, with bootstrap CIs) and FAD (CLAP) against
+  the held-out clips. Held-out artists are split into two folds; each fold in turn is the
+  reference and the other fold is evaluated as real (the floor) and as the base/LoRA clips
+  generated from its captions; the folds are averaged. `gap_closed = (base − lora)/(base − real)`.
+  KAD follows kadtk (Gaussian kernel, bandwidth = median pairwise distance of the reference,
+  unbiased MMD² × 100) except within-set means skip pairs of clips from the same track; the
+  embeddings are per clip, so the values aren't comparable with published frame-level numbers.
+- `cross_genre.csv` — KAD of every set/condition/genre against every genre's held-out clips.
+- `confusion.csv` — 4-genre prediction counts (AST and CLAP zero-shot).
+- `ltas.npz`, `ltas_summary.csv` — long-term average spectra; mean |dB| gap to real over
+  50 Hz–16 kHz and the share of energy above 16 kHz.
+- `folds.csv` — the artist folds.
+
+On Hawk, from the repo root:
+
+```bash
+srun -p short -c 4 --mem=16G -t 60 ./hawk_container.sh python eval_metrics.py
+```
+
+It prints a KAD table (real = floor, LoRA − base delta, gap closed) and the paired-metric deltas
+with p-values. Copy the results to the Mac to inspect them:
+`scp -r hawk:MusicLLM/eval_results ./eval_results_hawk`.
+
+Options: `--genres`, `--sets`, `--reference` (`heldout_clips`), `--feats` (`eval_feats`),
+`--splits` (`genre_splits`), `--out` (`eval_results`), `--boot` (1000), `--perm` (10000),
+`--seed` (0).
+
 ### `stable_audio_test.py`
 
 Generates 30 s with `small-music` from the prompt written in the script and saves `neo_soul.wav`.
@@ -380,6 +450,8 @@ the Seed box to generate the same track again.
 | `runs/` | LoRA checkpoints from `train_lora.slurm` | yes |
 | `containers/` | Singularity image for Hawk (`ubuntu-22.04`) | yes |
 | `lora_comparison/`, `eval_gen*/`, `*.wav` | Generated audio | yes |
+| `eval_feats/` | `eval_features.py` feature `.npz`s | yes |
+| `eval_results/` | `eval_metrics.py` metric tables | no |
 | `slurm-*.out` | SLURM job logs | yes |
 | `stable-audio-3/` | Stable Audio 3 code | git submodule |
 

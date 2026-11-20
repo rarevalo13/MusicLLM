@@ -48,6 +48,8 @@ foundation model locally.
 | `HAWK_TRAINING_PLAN.md` | The user's step-by-step for the full Hawk run, including the Hugging Face setup | — |
 | `compare_lora.py` | Same prompts with LoRA strength 0 vs 1, same `seed=`, for A/B listening; `--genre rock\|hiphop\|classical\|house` picks the built-in prompts. On Hawk run from the repo root as `./hawk_container.sh python compare_lora.py`; with uv, from `stable-audio-3/` as `../compare_lora.py` | Cluster GPU |
 | `generate_eval.py` + `.slurm` | Main eval set: for every `heldout_clips/<genre>/` clip, one base + one LoRA clip from its caption, same seed → `eval_gen/<genre>/{base,lora}/` + `manifest.csv`; chunk-round order, resumable. On Hawk `sbatch generate_eval.slurm <genre>` | Cluster GPU |
+| `eval_features.py` + `.slurm` | Per-clip eval features for one genre: held-out clips (`real`) + every generated set → CLAP/AST embeddings and scores, AudioSet tag probs, LTAS, level stats → `eval_feats/<set>/<genre>/*.npz`; skips unfinished sets, keeps existing files (`--force` redoes) | Cluster GPU |
+| `eval_metrics.py` | Metrics from `eval_feats/` + `genre_splits/<genre>/heldout.csv`: KAD/FAD with artist-fold real floor, paired CLAP/AST/zero-shot/KL metrics with bootstrap CIs → `eval_results/` | Cluster CPU |
 | `stable_audio_test.py` | One-off text-to-audio test with `small-music` | Mac |
 | `website/website.py` + `static/index.html` | Tyler's Flask web demo on `small-music`: prompt → WAV; `--lora NAME=PATH` (repeatable) adds a base/LoRA selector and same-seed side-by-side compare; seed box; serves `127.0.0.1:8000` (`--host`, `--port`) | Mac or cluster GPU |
 
@@ -98,6 +100,20 @@ from `rock_lora_smoke/` — generation, manifest repair/resume and the `.slurm` 
 work; **not yet run on Hawk**. On MPS the LoRA clips took about twice as long as the base ones
 (5 s clips: base 4–8 s, LoRA 10–16 s); the manifest's `gen_seconds` will show whether the A100
 does the same (the LoRA is a weight parametrization, recomputed in the forward pass).
+**Hawk smoke test** (`--limit 4`, rock, A100): works end to end. Per 30 s clip: base 0.56 s, LoRA
+0.92 s (first call excluded); the sampler bars show ~15.5 vs ~9.2 steps/s, so the LoRA overhead is
+in the 8 denoising steps, not the decode. Peak VRAM 2.1 GB (`torch.cuda.max_memory_allocated`).
+**Nov 19 (later):** `eval_features.py` + `.slurm` (per-clip CLAP/AST/spectrum features →
+`eval_feats/`) and `eval_metrics.py` (KAD/FAD + paired metrics → `eval_results/`) written for the
+metrics stage. Verified on the Mac only: KAD matches kadtk's own implementation (rel. diff
+≤3e-5, one clip per track), FAD matches fadtk's eigenvalue formula, and the track-bootstrap
+weights equal brute-force resampling; an end-to-end fixture (`rock_lora_smoke/` +
+`hiphop_lora_smoke/` as held-out clips, fake LoRA/base) gave LoRA = the real floor, gap closed
+100%, KL 0. Not yet run on Hawk. Found `laion/larger_clap_music` broken — its text tower maps
+every caption to ~the same embedding — so `eval_features.py` uses
+`laion/larger_clap_music_and_speech` and stops if the four genre-name text embeddings come out
+near-identical. Caveat for the writeup: Stable Audio 3's post-training used a CLAP loss, so
+CLAP-based metrics may favour the base model.
 
 ## Environments
 
@@ -169,6 +185,9 @@ srun -p gpu-short --gres=gpu:1 -c 4 --mem=16G -t 30 ./hawk_container.sh python c
 # Evaluation set (one job per genre, resumable; smoke test first)
 sbatch -p gpu-short -t 20 generate_eval.slurm rock --limit 4 --out eval_gen_smoke
 sbatch generate_eval.slurm rock    # then hiphop classical house
+# Evaluation features + metrics (after the generate-eval jobs finish)
+for g in rock hiphop classical house; do sbatch eval_features.slurm $g; done
+srun -p short -c 4 --mem=16G -t 60 ./hawk_container.sh python eval_metrics.py   # → eval_results/
 
 # Training elsewhere (any CUDA machine with uv, inside stable-audio-3/)
 uv run python scripts/train_lora.py \
@@ -292,7 +311,12 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
 - Main set: one base + one LoRA clip per held-out clip, generated from the clip's own caption
   with the same seed (`generate_eval.py`), ~1,100 pairs per genre. The 12
   `lora_comparison_hawk/` pairs are for listening.
-- FAD against held-out real tracks of the genre; CLAP score for prompt adherence.
+- Metrics on the eval set (`eval_features.py` + `eval_metrics.py` → `eval_results/`): KAD on CLAP
+  and AST embeddings (primary; artist-split folds give the real floor, `gap_closed` =
+  (base − lora)/(base − real)), FAD on CLAP, CLAP score, AST + CLAP zero-shot 4-genre tags, KL
+  between the AST tag distributions of a clip and its source held-out clip; paired metrics with
+  bootstrap CIs over tracks. Caveat: Stable Audio 3's post-training used a CLAP loss, so
+  CLAP-based metrics may favour the base model.
 - Blind A/B listening test with 10–15 classmates.
 - Latency and peak VRAM for 30/60/120 s clips; steps sweep (4/8/16/32/50) for a
   latency-vs-quality curve; optional int8 quantization experiment.
@@ -311,14 +335,15 @@ sf.write("out.wav", audio.detach().cpu().squeeze(0).T.numpy(), 44100)
 2. Classical + house on Hawk, same steps as the plan: `sbatch download_genres.slurm --genres rock
    hiphop classical house` → `split_holdout.py` (rock/hip hop keep their split) →
    `make_latents.slurm` and `train_lora.slurm` per genre → `compare_lora.py --genre classical|house`.
-3. Generate the evaluation set on Hawk first (`generate_eval.slurm`, one job per genre), then the
-   evaluation pipeline (FAD vs `heldout_clips/<genre>/`, CLAP, blind A/B test); measure latency and
-   peak VRAM (SLURM doesn't record it); ablations; finish slides before Thanksgiving.
+3. Generate the evaluation set on Hawk (`generate_eval.slurm`, one job per genre), then features +
+   metrics (`eval_features.slurm` per genre, `eval_metrics.py`) and plots; blind A/B test; measure
+   latency and peak VRAM; ablations; finish slides before Thanksgiving.
 
 ## Open questions to verify
 
-- Peak VRAM for training (batch 4) and generation: not recorded by Hawk's SLURM; measure with
-  `torch.cuda.max_memory_allocated()` or by sampling `nvidia-smi` during a short run.
+- Peak VRAM for training (batch 4): not recorded by Hawk's SLURM; measure with
+  `torch.cuda.max_memory_allocated()` or by sampling `nvidia-smi` during a short run. Generation
+  (30 s clip, LoRA loaded): 2.1 GB allocated (Nov 19 smoke test); `nvidia-smi` would show more.
 - Whether all Jamendo MP3s are 44.1 kHz: all 29 in `sample_tracks/` are 44.1 kHz stereo;
   check `prepare_lora_data.py` skip messages at scale (the trainer resamples on load anyway).
 - JamendoMaxCaps captions: the HF repo has `final_caption30sec.jsonl` (787 MB). Its format hasn't

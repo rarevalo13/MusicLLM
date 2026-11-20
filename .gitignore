@@ -27,5 +27,6 @@ genre_splits/
 heldout_clips/
 runs/
 eval_gen*/
+eval_feats/
 *_clips_*/
 .vscode/
