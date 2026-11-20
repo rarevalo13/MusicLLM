@@ -44,7 +44,8 @@ ap.add_argument("--sets", nargs="+", default=SETS, help="folders; the one equal 
 ap.add_argument("--heldout", default="heldout_clips")
 ap.add_argument("--out", default="eval_feats")
 ap.add_argument("--batch", type=int, default=16, help="clips per model batch")
-ap.add_argument("--workers", type=int, default=4, help="audio loading processes")
+ap.add_argument("--workers", type=int, default=4 if sys.platform.startswith("linux") else 0,
+                help="audio loading processes (0 off Linux: spawned workers would re-run this script)")
 ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
 ap.add_argument("--limit", type=int, default=None, help="first N clips only (tests; output is partial)")
 ap.add_argument("--force", action="store_true")
@@ -137,8 +138,9 @@ class Clips(torch.utils.data.Dataset):
         stats = torch.stack([10 * torch.log10(x.pow(2).mean() + 1e-12), x.abs().max(),
                              (x.abs() >= 0.999).float().mean(),
                              10 * torch.log10((side.pow(2).mean() + 1e-12) / (mid.pow(2).mean() + 1e-12))])
+        # ltas/stats are kept for the whole folder: numpy, so they don't each hold a shared-memory file descriptor
         return (clap_in["input_features"].float(), clap_in["is_longer"], ast_in["input_values"],
-                ltas, stats)
+                ltas.numpy(), stats.numpy())
 
 
 def collate(batch):
@@ -184,22 +186,22 @@ def extract(paths, label):
         i = j = 0
         for b in batch:
             k, m = b[0].shape[0], b[2].shape[0]
-            res["clap"].append(F.normalize(a[i:i + k].mean(0), dim=-1))
-            res["ast_emb"].append(pooled[j:j + m].mean(0))
-            res["ast_logits"].append(logits[j:j + m].mean(0))
-            res["ast_prob"].append(torch.sigmoid(logits[j:j + m]).mean(0))
+            res["clap"].append(F.normalize(a[i:i + k].mean(0), dim=-1).numpy())
+            res["ast_emb"].append(pooled[j:j + m].mean(0).numpy())
+            res["ast_logits"].append(logits[j:j + m].mean(0).numpy())
+            res["ast_prob"].append(torch.sigmoid(logits[j:j + m]).mean(0).numpy())
             res["ltas_db"].append(b[3])
             res["stats"].append(b[4])
             i, j = i + k, j + m
         n = len(res["clap"])
         if n % 160 < len(batch) or n == len(paths):
             print(f"  {label}: {n}/{len(paths)}")
-    return {k: torch.stack(v).float().numpy() for k, v in res.items()}
+    return {k: np.stack(v).astype(np.float32) for k, v in res.items()}
 
 
 def save(path, **arrays):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path[:-len(".npz")] + ".tmp.npz"
+    tmp = path[:-len(".npz")] + f".{os.getpid()}.tmp.npz"  # per process: genre jobs run side by side
     np.savez(tmp, **arrays)
     os.replace(tmp, path)
 
