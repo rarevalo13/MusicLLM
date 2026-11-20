@@ -1,0 +1,36 @@
+Base vs LoRA comparison clips - Stable Audio 3 Small
+
+These 24 clips were generated on the Hawk cluster with compare_lora.py from
+the MusicLLM repo. Each genre folder holds three prompts, each generated twice
+with the same seed:
+
+  promptN_base.wav  base model (small-music) with the LoRA at strength 0,
+                    which switches it off completely
+  promptN_lora.wav  same prompt and seed with the genre's LoRA at strength 1
+
+The seed equals the prompt number (prompt0 = seed 0, prompt1 = seed 1,
+prompt2 = seed 2), so within a pair the LoRA is the only setting that changes.
+All clips: 8 sampling steps, CFG scale 1.0, 30 seconds, 44.1 kHz stereo.
+
+The prompts are worded like the LoRA training captions, which were built from
+Jamendo genre, instrument, mood and tempo tags.
+
+rock/
+  prompt0: Instrumental rock, featuring electric guitar, drums, bass, energetic mood, fast tempo
+  prompt1: Instrumental rock with indie influences, featuring electric guitar, melancholic mood, medium tempo
+  prompt2: Instrumental rock with pop influences, featuring acoustic guitar, drums, happy mood, medium tempo
+
+hiphop/
+  prompt0: Instrumental hip hop, featuring drums, bass, synthesizer, urban, dark mood, medium tempo
+  prompt1: Instrumental hip hop with lo-fi influences, featuring piano, drums, bass, peaceful mood, slow tempo
+  prompt2: Instrumental hip hop with trap influences, featuring synthesizer, drum machine, bass, energetic mood, fast tempo
+
+classical/
+  prompt0: Instrumental classical, featuring piano, sad, romantic mood, slow tempo
+  prompt1: Instrumental classical with film score influences, featuring orchestra, strings, epic, cinematic mood, medium tempo
+  prompt2: Instrumental classical with baroque influences, featuring strings, violin, cello, happy mood, fast tempo
+
+house/
+  prompt0: Instrumental house with electronic and dance influences, featuring synthesizer, bass, drums, energetic, party mood, fast tempo
+  prompt1: Instrumental house with deep house influences, featuring synthesizer, electric piano, bass, groovy, lounge mood, medium tempo
+  prompt2: Instrumental house with electronic and techno influences, featuring synthesizer, drum machine, bass, dark, minimal mood, medium tempo
